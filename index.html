@@ -2003,39 +2003,42 @@ function getTownViewMetrics(){
   return {scale:size/TOWN_VIEW_SIZE,offsetX,offsetY,size};
 }
 const JOB_COLORS={farmer:'#8a9b4f',miner:'#8a6a4a',artisan:'#a0632f',merchant:'#7a4fa0',laborer:'#6b7280',unemployed:'#56658a'};
-function ctxRoundRect(x,y,w,h,r){
-  ctx.beginPath();
-  ctx.moveTo(x+r,y);
-  ctx.arcTo(x+w,y,x+w,y+h,r);
-  ctx.arcTo(x+w,y+h,x,y+h,r);
-  ctx.arcTo(x,y+h,x,y,r);
-  ctx.arcTo(x,y,x+w,y,r);
-  ctx.closePath();
+/* Real emoji people instead of hand-drawn shapes -- skin-tone accurate via the
+   standard Fitzpatrick modifiers, age-appropriate base figure, rendered by the
+   platform's own color emoji font (the same one already drawing buildings). */
+const SKIN_MODIFIERS=['\u{1F3FB}','\u{1F3FB}','\u{1F3FC}','\u{1F3FD}','\u{1F3FE}','\u{1F3FF}','\u{1F3FF}'];
+const EMOJI_FONT='"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",sans-serif';
+function npcEmoji(n){
+  const mod=SKIN_MODIFIERS[n.appearance?.skin??2]||'';
+  let base='\u{1F9D1}';
+  if(n.status==='infant') base='\u{1F476}';
+  else if(n.status==='child') base='\u{1F9D2}';
+  else if(n.status==='elder') base='\u{1F9D3}';
+  return base+mod;
 }
 function drawNpcDot(cx,cy,r,n,walking,walkPhase){
-  const skin=SKIN_TONES[n.appearance?.skin??0]||SKIN_TONES[0];
-  const hair=HAIR_COLORS[n.appearance?.hairColor??0]||HAIR_COLORS[0];
-  const clothes=JOB_COLORS[n.job]||JOB_COLORS.unemployed;
-  const swing=walking?Math.sin(walkPhase||0)*r*0.4:0;
-  const legW=r*0.3, legH=r*0.62;
-  ctx.fillStyle='#26262e';
-  ctx.fillRect(cx-r*0.32-legW/2,cy+r*0.2+swing*0.35,legW,legH);
-  ctx.fillRect(cx+r*0.32-legW/2,cy+r*0.2-swing*0.35,legW,legH);
-  ctxRoundRect(cx-r*0.62,cy-r*0.35,r*1.24,r*1.05,r*0.32);
-  ctx.fillStyle=clothes; ctx.fill();
-  ctx.beginPath(); ctx.arc(cx,cy-r*0.78,r*0.58,0,Math.PI*2);
-  ctx.fillStyle=skin; ctx.fill();
-  ctx.strokeStyle='rgba(0,0,0,0.4)'; ctx.lineWidth=0.75; ctx.stroke();
-  ctx.beginPath(); ctx.arc(cx,cy-r*1.08,r*0.54,Math.PI,0);
-  ctx.fillStyle=hair; ctx.fill();
-  if(n.notable){
-    ctx.beginPath(); ctx.arc(cx,cy-r*0.78,r*0.58+2,0,Math.PI*2);
-    ctx.strokeStyle='rgba(232,196,104,0.9)'; ctx.lineWidth=1.5; ctx.stroke();
-  }
+  const size=r*2.9;
+  const bob=walking?Math.abs(Math.sin(walkPhase||0))*r*0.18:0;
+  const sway=walking?Math.sin(walkPhase||0)*0.1:0;
   if(n.frozen){
-    ctx.beginPath(); ctx.arc(cx,cy-r*0.15,r*1.15,0,Math.PI*2);
+    ctx.beginPath(); ctx.arc(cx,cy,r*1.15,0,Math.PI*2);
     ctx.fillStyle='rgba(140,210,255,0.3)'; ctx.fill();
     ctx.strokeStyle='rgba(180,225,255,0.9)'; ctx.lineWidth=1.5; ctx.stroke();
+  }
+  ctx.save();
+  ctx.translate(cx,cy-bob);
+  ctx.rotate(sway);
+  ctx.font=`${size}px ${EMOJI_FONT}`;
+  ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillText(npcEmoji(n),0,0);
+  ctx.restore();
+  ctx.beginPath(); ctx.arc(cx,cy+r*1.05,r*0.22,0,Math.PI*2);
+  ctx.fillStyle=JOB_COLORS[n.job]||JOB_COLORS.unemployed; ctx.fill();
+  ctx.strokeStyle='rgba(0,0,0,0.4)'; ctx.lineWidth=0.5; ctx.stroke();
+  if(n.notable){
+    ctx.font=`${r*1.15}px ${EMOJI_FONT}`;
+    ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.fillText('\u{1F451}',cx,cy-r*1.9);
   }
 }
 
