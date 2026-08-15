@@ -687,6 +687,7 @@ function makeNpc(opts){
       if(pi!==-1) traits[pi]=choice(TRAIT_POOL.filter(t=>t!=='Pious'));
     }
   }
+  const curiosityBaseline=clamp(inheritedCuriosity(opts)+rand(-12,12)+(traits.includes('Curious')?18:0),3,97);
   const n={
     id:uid('n'), name:opts.name||choice(FIRST_NAMES), sex, age:opts.age??0, alive:true,
     townId:opts.townId, status:'infant', believer,
@@ -696,10 +697,18 @@ function makeNpc(opts){
     relationship:{status:'single'}, parents:opts.parents||[], children:[],
     blessCount:0, curseCount:0, disease:false, birthTick:G.tickCount, lastBirthTick:0,
     appearance:opts.appearance||randomAppearance(), custom:!!opts.custom,
-    job:'unemployed', workplaceId:null, wealth:irand(5,25)
+    job:'unemployed', workplaceId:null, wealth:irand(5,25),
+    curiosityBaseline, curiosity:curiosityBaseline
   };
   updateLifeStage(n);
   return n;
+}
+function inheritedCuriosity(opts){
+  if(opts.parents && opts.parents.length){
+    const vals=opts.parents.map(id=>G.npcs[id]?.curiosityBaseline).filter(v=>v!=null);
+    if(vals.length) return vals.reduce((a,b)=>a+b,0)/vals.length;
+  }
+  return rand(25,55);
 }
 function fertility(n){
   if(n.sex!=='f'||!n.alive) return 0;
@@ -927,11 +936,13 @@ function stepTown(town){
 
   const hasInventor=town.notableIds.some(id=>G.npcs[id]?.role==='inventor'&&G.npcs[id]?.alive);
   const inventorBonus=hasInventor?1.6:1;
-  town.techProgress+=town.population*0.0032*inventorBonus*(1-town.unrest/220);
+  const curiosityBonus=1+(townAvgCuriosity(town)/100)*0.5;
+  town.techProgress+=town.population*0.0032*inventorBonus*curiosityBonus*(1-town.unrest/220);
   const need=60+town.techStageIdx*55;
   if(town.techProgress>=need && town.techStageIdx<TECH_STAGES.length-1){
     town.techStageIdx++; town.techProgress=0;
     log(`${town.name} advances into the ${TECH_STAGES[town.techStageIdx]}.`,'tech');
+    for(const id of town.npcIds){ const n=G.npcs[id]; if(n&&n.alive) n.curiosity=clamp(n.curiosity+8,0,100); }
     markDirty('towns');
   }
 
@@ -998,6 +1009,10 @@ function weatherFoodMult(town){
   return 1;
 }
 function activeDisease(town){return town.diseases.some(d=>!d.cured);}
+function townAvgCuriosity(town){
+  const vals=town.npcIds.map(id=>G.npcs[id]).filter(n=>n&&n.alive).map(n=>n.curiosity);
+  return vals.length?vals.reduce((a,b)=>a+b,0)/vals.length:35;
+}
 
 function moodDelta(n,town){
   let d=0;
@@ -1015,6 +1030,7 @@ function stepNpc(n,town,hungry){
   updateLifeStage(n);
   n.hunger=clamp(n.hunger+(hungry?2.4:-1.6)+rand(-0.4,0.4),0,100);
   n.mood=clamp(n.mood+moodDelta(n,town),0,100);
+  n.curiosity=clamp(n.curiosity+(n.curiosityBaseline-n.curiosity)*0.01+rand(-0.5,0.5),0,100);
   if(n.believer){
     const baseline=personalFaithBaseline(n);
     const worldPull=(town.worship-baseline)*0.15;
@@ -1114,12 +1130,16 @@ function maybeBecomeNotable(n,town){
   if(n.notable||n.age<16) return;
   const giftMult=n.giftedAtBirth?3.2:1;
   const ambitionMult=n.traits.includes('Ambitious')?1.8:1;
-  const chance=(n.talent/100)*0.0007*giftMult*ambitionMult;
+  const curiosityMult=1+(n.curiosity/100)*0.6;
+  const chance=(n.talent/100)*0.0007*giftMult*ambitionMult*curiosityMult;
   if(Math.random()<chance){
     const roles=['leader','inventor','healer','priest'];
     const avail=roles.filter(r=>!town.notableIds.some(id=>{const t=G.npcs[id];return t&&t.alive&&t.role===r;}));
     if(!avail.length) return;
-    const role=n.traits.includes('Ambitious')&&avail.includes('leader')&&Math.random()<0.5?'leader':choice(avail);
+    let role;
+    if(n.traits.includes('Ambitious')&&avail.includes('leader')&&Math.random()<0.5) role='leader';
+    else if(n.curiosity>65&&avail.includes('inventor')&&Math.random()<0.55) role='inventor';
+    else role=choice(avail);
     n.notable=true; n.role=role; n.title=titleFor(role);
     town.notableIds.push(n.id);
     if(role==='leader' && !town.government.leaderId) town.government.leaderId=n.id;
@@ -1285,20 +1305,26 @@ function maybeGeneratePrayer(){
   if(!towns.length) return;
   if(Math.random()>0.06) return;
   const town=choice(towns);
+  const curiousAdult=town.npcIds.map(id=>G.npcs[id]).find(n=>n&&n.alive&&n.status==='adult'&&n.curiosity>60);
   const needs=[];
   if(town.food<town.foodCap*0.3) needs.push('rain');
   if(activeDisease(town)) needs.push('health');
   if(town.atWarWith.length) needs.push('war');
   if(town.population<15) needs.push('fertility');
+  if(curiousAdult) needs.push('wonder');
   needs.push('rain','fertility');
   const type=choice(needs);
   const texts={
     rain:[`The fields of ${town.name} thirst. They pray for rain.`,`Farmers of ${town.name} beg the sky to open.`],
     health:[`The sick of ${town.name} cry out for healing.`,`${town.name} prays for deliverance from illness.`],
     war:[`${town.name} prays for strength in battle.`,`The warriors of ${town.name} seek your favor in war.`],
-    fertility:[`${town.name} prays for new life among its people.`,`The elders of ${town.name} pray for growth.`]
+    fertility:[`${town.name} prays for new life among its people.`,`The elders of ${town.name} pray for growth.`],
+    wonder:[`${curiousAdult?.name} of ${town.name} wonders: why do the stars wander the night sky?`,
+      `${curiousAdult?.name} asks: what lies beyond the edge of the world?`,
+      `${curiousAdult?.name} seeks to understand why the seasons turn.`]
   };
   const prayer={id:uid('pr'),townId:town.id,type,text:choice(texts[type]),
+    npcId:type==='wonder'?curiousAdult.id:null,
     createdAt:G.tickCount,expiresAt:G.tickCount+40};
   G.prayers.push(prayer);
   markDirty('prayers');
@@ -1325,6 +1351,12 @@ function answerPrayer(id){
   else if(p.type==='health'){ for(const d of town.diseases) if(!d.cured) d.cureProgress=clamp(d.cureProgress+18,0,100); }
   else if(p.type==='war'){ town.policeStrength=clamp(town.policeStrength+15,0,100); }
   else if(p.type==='fertility'){ town.food=clamp(town.food+60,0,town.foodCap); }
+  else if(p.type==='wonder'){
+    town.techProgress=clamp(town.techProgress+15,0,9999);
+    const asker=p.npcId?G.npcs[p.npcId]:null;
+    if(asker&&asker.alive) asker.curiosity=clamp(asker.curiosity+12,0,100);
+    log(`Insight dawns on ${town.name} — your answer quickens their understanding.`,'general',{silent:true});
+  }
   town.worship=clamp(town.worship+4,0,100);
   recordDivine(town,'weather');
   G.stats.totalPrayersAnswered++;
@@ -1351,14 +1383,16 @@ function maybeFoundColony(){
       town.population=Math.round(town.population*0.7);
       G.towns.push(nt);
       for(let i=0;i<6;i++) addNpcToTown(nt,makeNpc({age:16+Math.random()*20,townId:nt.id,techStageIdx:nt.techStageIdx}));
-      const founder=town.npcIds.map(id=>G.npcs[id]).find(n=>n&&n.alive&&n.status==='adult'&&n.traits.includes('Ambitious')&&!n.notable);
+      const candidates=town.npcIds.map(id=>G.npcs[id]).filter(n=>n&&n.alive&&n.status==='adult'&&!n.notable&&(n.traits.includes('Ambitious')||n.curiosity>70));
+      const founder=candidates.length?choice(candidates):null;
       if(founder){
         town.npcIds=town.npcIds.filter(id=>id!==founder.id);
         founder.townId=nt.id; nt.npcIds.push(founder.id);
         founder.notable=true; founder.role='leader'; founder.title='Leader';
         nt.notableIds.push(founder.id);
         nt.government.leaderId=founder.id;
-        log(`${founder.name}, ever ambitious, leads settlers from ${town.name} to found ${nt.name}.`,'milestone');
+        const drive=founder.traits.includes('Ambitious')?'ever ambitious':'restless with curiosity';
+        log(`${founder.name}, ${drive}, leads settlers from ${town.name} to found ${nt.name}.`,'milestone');
       } else {
         log(`Settlers from ${town.name} found the town of ${nt.name}.`,'milestone');
       }
@@ -1880,7 +1914,7 @@ function drawTownView(town){
       const hasJob=n.job&&n.job!=='laborer'&&n.job!=='unemployed';
       const workplace=hasJob?town.buildings.find(bd=>bd.id===n.workplaceId):null;
       const tx=workplace?workplace.x:hx, ty=workplace?workplace.y:hy;
-      const wobble=workplace?14:36;
+      const wobble=workplace?14:24+(n.curiosity/100)*24;
       px=tx+Math.sin(phase*Math.PI*2*3+seed)*wobble;
       py=ty+Math.cos(phase*Math.PI*2*2.3+seed*1.7)*wobble;
     }
@@ -1959,7 +1993,7 @@ function renderPowers(){
 }
 
 /* ============================== UI: PRAYERS PANEL ============================== */
-const PRAYER_ICON={rain:'🌧️',health:'⚕️',war:'⚔️',fertility:'👶'};
+const PRAYER_ICON={rain:'🌧️',health:'⚕️',war:'⚔️',fertility:'👶',wonder:'🔭'};
 function renderPrayers(){
   const el=document.getElementById('panel-prayers');
   const badge=document.getElementById('prayerBadge');
@@ -2100,6 +2134,7 @@ function openNpcModal(npc){
     <div class="statRow"><span class="label">Faith</span><div class="bar"><i style="width:${npc.faith}%;background:#8b5be8"></i></div></div>
     <div class="statRow"><span class="label">Health</span><div class="bar"><i style="width:${npc.health}%;background:var(--water)"></i></div></div>
     <div class="statRow"><span class="label">Talent</span><div class="bar"><i style="width:${npc.talent}%;background:var(--gold)"></i></div></div>
+    <div class="statRow"><span class="label">Curiosity</span><div class="bar"><i style="width:${npc.curiosity}%;background:#5bc4e8"></i></div></div>
     <div class="mSub">Traits: ${npc.traits.map(t=>`<span class="traitTag">${esc(t)}</span>`).join('')||'none'}</div>
     <div class="mSub">Relationship: ${esc(npc.relationship.status)}${spouse?' to '+esc(spouse.name):''} • Children: ${npc.children.length}</div>
     <div class="actionRow">
@@ -2491,6 +2526,10 @@ function boot(){
       if(n.job===undefined) n.job='unemployed';
       if(n.workplaceId===undefined) n.workplaceId=null;
       if(n.wealth===undefined) n.wealth=irand(5,25);
+      if(n.curiosityBaseline===undefined){
+        n.curiosityBaseline=clamp(rand(25,55)+(n.traits&&n.traits.includes('Curious')?18:0),3,97);
+        n.curiosity=n.curiosityBaseline;
+      }
     });
     if(G.offlineProgress){
       const lastReal=Number(localStorage.getItem(SAVE_KEY+'_time'))||Date.now();
