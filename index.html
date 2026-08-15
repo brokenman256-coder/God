@@ -175,12 +175,21 @@ footer#chronicle.collapsed{height:30px;}
   border-radius:6px;padding:7px 12px;font-size:12px;}
 .actionRow button:hover:not(:disabled){background:var(--gold);color:#241a00;}
 .actionRow button:disabled{opacity:.35;cursor:not-allowed;}
+.actionRow button.selected{background:var(--gold);color:#241a00;}
+.swatchRow{display:flex;gap:6px;flex-wrap:wrap;margin:4px 0 10px;}
+.swatch{width:26px;height:26px;border-radius:6px;border:2px solid var(--border);cursor:pointer;}
+.swatch.sel{border-color:var(--gold);box-shadow:0 0 0 2px rgba(232,196,104,.4);}
+.chField{width:100%;background:var(--panel2);border:1px solid var(--border);color:var(--text);
+  border-radius:6px;padding:7px 9px;font-size:13px;}
+.miniPortrait{flex-shrink:0;width:22px;height:22px;line-height:0;}
+.miniPortrait svg{display:block;border-radius:5px;}
+.modalPortrait{flex-shrink:0;line-height:0;}
+.modalPortrait svg{display:block;border-radius:10px;}
 .npcList{max-height:200px;overflow-y:auto;border:1px solid var(--border);border-radius:8px;margin-top:6px;}
 .npcRow{display:flex;align-items:center;gap:8px;padding:6px 10px;border-bottom:1px solid var(--border);
   cursor:pointer;font-size:12px;}
 .npcRow:last-child{border-bottom:none;}
 .npcRow:hover{background:var(--panel2);}
-.npcRow .glyph{font-size:16px;}
 .npcRow .nm{flex:1;}
 .npcRow .role{color:var(--gold);font-size:10px;}
 .soulCol h4{font-size:12px;margin:0 0 6px;text-transform:uppercase;letter-spacing:1px;}
@@ -284,6 +293,40 @@ const TOWN_NAMES=["Ashvale","Brenhollow","Corwick","Duskmere","Emberfall","Fenmo
 const DISEASE_NAMES=["Grey Fever","Wasting Rot","Bloodcough","Marsh Plague","Weeping Pox","Bonefire Sickness","Crimson Ague","Hollow Lung"];
 const TRAIT_POOL=["Strong","Pious","Cunning","Sickly","Charismatic","Stubborn","Kind","Greedy","Brave","Timid","Curious","Patient","Ambitious"];
 
+/* Procedurally generated portraits -- a parametric avatar, not a photograph.
+   No image generation or lookup of real people is involved; this is a small
+   hand-authored SVG face assembled from palette choices. */
+const SKIN_TONES=['#ffe0bd','#ffcd94','#eaa985','#d08b5b','#a86b3c','#6b4423','#3f2a1a'];
+const HAIR_COLORS=['#1b1b1b','#3a2a1a','#6b4423','#a56b2c','#c9a227','#8b8b8b','#e8dcc8','#7a2020'];
+const EYE_COLORS=['#3a2a1a','#2e5339','#3a5a8c','#5a5a5a','#4a2a5a'];
+const HAIR_STYLES={
+  bald:()=>'',
+  short:(c)=>`<path d="M18 46 Q20 14 50 14 Q80 14 82 46 Q70 30 50 30 Q30 30 18 46 Z" fill="${c}"/>`,
+  long:(c)=>`<path d="M16 46 Q18 12 50 12 Q82 12 84 46 L84 80 Q77 60 70 58 Q75 34 50 30 Q25 34 30 58 Q23 60 16 80 Z" fill="${c}"/>`,
+  curly:(c)=>`<circle cx="28" cy="34" r="12" fill="${c}"/><circle cx="42" cy="21" r="13" fill="${c}"/><circle cx="58" cy="21" r="13" fill="${c}"/><circle cx="72" cy="34" r="12" fill="${c}"/><circle cx="50" cy="17" r="14" fill="${c}"/>`,
+  bun:(c)=>`<path d="M18 46 Q20 16 50 16 Q80 16 82 46 Q70 30 50 30 Q30 30 18 46 Z" fill="${c}"/><circle cx="50" cy="9" r="9" fill="${c}"/>`
+};
+function randomAppearance(){
+  return {skin:irand(0,SKIN_TONES.length-1),hairColor:irand(0,HAIR_COLORS.length-1),
+    eyeColor:irand(0,EYE_COLORS.length-1),hairStyle:choice(Object.keys(HAIR_STYLES))};
+}
+function portraitSVG(app,size){
+  app=app||randomAppearance();
+  size=size||64;
+  const skin=SKIN_TONES[app.skin??0]||SKIN_TONES[0];
+  const hairColor=HAIR_COLORS[app.hairColor??0]||HAIR_COLORS[0];
+  const eyeColor=EYE_COLORS[app.eyeColor??0]||EYE_COLORS[0];
+  const hairFn=HAIR_STYLES[app.hairStyle]||HAIR_STYLES.short;
+  return `<svg viewBox="0 0 100 100" width="${size}" height="${size}" xmlns="http://www.w3.org/2000/svg">
+    <rect width="100" height="100" rx="14" fill="#0d1226"/>
+    <ellipse cx="50" cy="62" rx="25" ry="29" fill="${skin}"/>
+    <ellipse cx="38" cy="56" rx="3.2" ry="4" fill="${eyeColor}"/>
+    <ellipse cx="62" cy="56" rx="3.2" ry="4" fill="${eyeColor}"/>
+    <path d="M42 73 Q50 79 58 73" stroke="#5a3a28" stroke-width="2.2" fill="none" stroke-linecap="round"/>
+    ${hairFn(hairColor)}
+  </svg>`;
+}
+
 /* ============================== DATA TABLES ============================== */
 const TILE={VOID:0,WATER:1,LAND:2,FOREST:3,MOUNTAIN:4,DESERT:5,ICE:6,ASH:7,LAVA:8};
 const TILE_COLOR={
@@ -366,6 +409,8 @@ const MUTATION_CHOICES={
 };
 
 const POWERS=[
+ {id:'createHuman',name:'Create Human',icon:'🧑‍🎨',cat:'Creation',cost:20,target:'modal',minEra:ERA.RISE,
+   desc:'Shape a specific person by hand — name, likeness, and traits of your choosing.'},
  {id:'rain',name:'Rain',icon:'🌧️',cat:'Weather',cost:8,target:'tile',minEra:ERA.BARREN,
    desc:'Bring rain to nourish the land around a point.'},
  {id:'drought',name:'Drought',icon:'🔥',cat:'Weather',cost:10,target:'tile',minEra:ERA.BARREN,
@@ -503,24 +548,30 @@ function createTown(x,y,name){
   return t;
 }
 function makeNpc(opts){
-  const sex=Math.random()<0.5?'m':'f';
+  const sex=opts.sex||(Math.random()<0.5?'m':'f');
   const techIdx=opts.techStageIdx??0;
   const believer=Math.random()>=(ATHEIST_CHANCE[techIdx]??0.3);
-  const traits=[];
-  const n1=choice(TRAIT_POOL); traits.push(n1);
-  if(Math.random()<0.35){ let n2=choice(TRAIT_POOL); if(n2!==n1) traits.push(n2); }
-  if(!believer){
-    const pi=traits.indexOf('Pious');
-    if(pi!==-1) traits[pi]=choice(TRAIT_POOL.filter(t=>t!=='Pious'));
+  let traits;
+  if(opts.traits && opts.traits.length){
+    traits=opts.traits.slice();
+  } else {
+    traits=[];
+    const n1=choice(TRAIT_POOL); traits.push(n1);
+    if(Math.random()<0.35){ let n2=choice(TRAIT_POOL); if(n2!==n1) traits.push(n2); }
+    if(!believer){
+      const pi=traits.indexOf('Pious');
+      if(pi!==-1) traits[pi]=choice(TRAIT_POOL.filter(t=>t!=='Pious'));
+    }
   }
   const n={
-    id:uid('n'), name:choice(FIRST_NAMES), sex, age:opts.age??0, alive:true,
+    id:uid('n'), name:opts.name||choice(FIRST_NAMES), sex, age:opts.age??0, alive:true,
     townId:opts.townId, status:'infant', believer,
     hunger:20, mood:60, faith:believer?30:8, health:90,
-    traits, talent:irand(10,40), crimeInclination:irand(5,20), karma:0,
+    traits, talent:opts.talent??irand(10,40), crimeInclination:irand(5,20), karma:0,
     role:'commoner', notable:false, title:null, giftedAtBirth:false,
     relationship:{status:'single'}, parents:opts.parents||[], children:[],
-    blessCount:0, curseCount:0, disease:false, birthTick:G.tickCount, lastBirthTick:0
+    blessCount:0, curseCount:0, disease:false, birthTick:G.tickCount, lastBirthTick:0,
+    appearance:opts.appearance||randomAppearance(), custom:!!opts.custom
   };
   updateLifeStage(n);
   return n;
@@ -1399,6 +1450,7 @@ function selectPower(id){
   if(!p) return;
   if(!isPowerUnlocked(p)){ toast('Not available yet.'); return; }
   if(p.id==='openUnderworld'){ openUnderworldModal(); return; }
+  if(p.id==='createHuman'){ openCreateHumanModal(); return; }
   if(p.target==='none'){
     if(G.favor<p.cost){ toast('Not enough favor.'); return; }
     G.favor-=p.cost;
@@ -1577,7 +1629,7 @@ function renderPowers(){
       </button>`;
     });
   }
-  const cats=['Life','Weather','Disaster','Blessing','Civilization','Underworld'];
+  const cats=['Creation','Life','Weather','Disaster','Blessing','Civilization','Underworld'];
   for(const cat of cats){
     const list=POWERS.filter(p=>p.cat===cat);
     if(!list.length) continue;
@@ -1709,21 +1761,10 @@ function openTownModal(town){
     <div class="panelHead">Citizens (${npcs.length})</div>
     <div class="npcList">
       ${npcs.map(n=>`<div class="npcRow" data-npc="${n.id}">
-        <span class="glyph">${npcGlyph(n)}</span><span class="nm">${esc(n.name)}${n.age<18?' ('+Math.floor(n.age)+')':''}</span>
+        <span class="miniPortrait">${portraitSVG(n.appearance,22)}</span><span class="nm">${n.custom?'✦ ':''}${esc(n.name)}${n.age<18?' ('+Math.floor(n.age)+')':''}</span>
         <span class="role">${n.notable?esc(n.title):(n.believer?'':'atheist')}</span></div>`).join('') || '<div class="emptyState">No citizens tracked.</div>'}
     </div>
   `);
-}
-function npcGlyph(n){
-  if(n.role==='messiah') return '👑';
-  if(n.role==='leader') return '🎖️';
-  if(n.role==='inventor') return '🔧';
-  if(n.role==='healer') return '⚕️';
-  if(n.role==='priest') return '🙏';
-  if(n.status==='infant') return '👶';
-  if(n.status==='child') return '🧒';
-  if(n.status==='elder') return '🧓';
-  return n.sex==='f'?'👩':'🧑';
 }
 function openNpcModal(npc){
   const town=townOf(npc.townId);
@@ -1732,8 +1773,13 @@ function openNpcModal(npc){
   const pendingApplies=pending&&pending.def.target==='npc';
   openModal(`
     <button class="modalClose" data-close="1">×</button>
-    <h2>${npcGlyph(npc)} ${esc(npc.name)}</h2>
-    <div class="mSub">${esc(npc.status)}, age ${Math.floor(npc.age)} — ${esc(town?town.name:'')}${npc.notable?' — '+esc(npc.title):''} — ${npc.believer?'Believer':'Atheist'}</div>
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:4px">
+      <div class="modalPortrait">${portraitSVG(npc.appearance,64)}</div>
+      <div>
+        <h2 style="margin:0">${npc.custom?'✦ ':''}${esc(npc.name)}</h2>
+        <div class="mSub" style="margin:2px 0 0">${esc(npc.status)}, age ${Math.floor(npc.age)} — ${esc(town?town.name:'')}${npc.notable?' — '+esc(npc.title):''} — ${npc.believer?'Believer':'Atheist'}</div>
+      </div>
+    </div>
     ${pendingApplies?`<div class="pendingBanner"><span>Apply ${esc(pending.def.name)} to ${esc(npc.name)}?</span><button data-applynpc="${npc.id}">Apply</button></div>`:''}
     <div class="statRow"><span class="label">Hunger</span><div class="bar"><i style="width:${npc.hunger}%;background:var(--warn)"></i></div></div>
     <div class="statRow"><span class="label">Mood</span><div class="bar"><i style="width:${npc.mood}%;background:var(--good)"></i></div></div>
@@ -1766,6 +1812,125 @@ function openUnderworldModal(){
     </div>
   `);
 }
+
+/* ============================== CREATE HUMAN MODAL ============================== */
+let createHumanState=null;
+const AGE_BANDS={newborn:0,child:10,youngAdult:20,adult:35,elder:65};
+const AGE_BAND_LABELS={newborn:'Newborn',child:'Child',youngAdult:'Young Adult',adult:'Adult',elder:'Elder'};
+function openCreateHumanModal(){
+  const towns=livingTowns();
+  if(!towns.length){ toast('Found a settlement first.'); return; }
+  createHumanState={
+    townId:towns[0].id, name:choice(FIRST_NAMES), sex:'f', ageBand:'adult',
+    appearance:randomAppearance(), traits:[], exceptional:false
+  };
+  renderCreateHumanModal();
+}
+function renderCreateHumanModal(){
+  const s=createHumanState;
+  const towns=livingTowns();
+  if(!towns.find(t=>t.id===s.townId)) s.townId=towns[0].id;
+  openModal(`
+    <button class="modalClose" data-close="1">×</button>
+    <h2>Create a Human</h2>
+    <div class="mSub">Shape one soul by hand — name, likeness, and gifts of your choosing. Their portrait is a generated likeness, not a photograph.</div>
+    <div style="display:flex;gap:16px;align-items:center;margin:10px 0">
+      <div class="modalPortrait">${portraitSVG(s.appearance,88)}</div>
+      <div style="flex:1">
+        <input id="chName" class="chField" type="text" value="${esc(s.name)}" placeholder="Name" style="margin-bottom:6px"/>
+        <button id="chRandomName" style="background:var(--panel2);border:1px solid var(--gold-dim);color:var(--gold);border-radius:6px;padding:5px 10px;font-size:11px">🎲 Random Name</button>
+      </div>
+    </div>
+    <div class="panelHead">Settlement</div>
+    <select id="chTown" class="chField">
+      ${towns.map(t=>`<option value="${t.id}" ${t.id===s.townId?'selected':''}>${esc(t.name)}</option>`).join('')}
+    </select>
+    <div class="panelHead">Sex</div>
+    <div class="actionRow">
+      <button data-chsex="f" class="${s.sex==='f'?'selected':''}">Female</button>
+      <button data-chsex="m" class="${s.sex==='m'?'selected':''}">Male</button>
+    </div>
+    <div class="panelHead">Age</div>
+    <div class="actionRow">
+      ${Object.keys(AGE_BANDS).map(k=>`<button data-chage="${k}" class="${s.ageBand===k?'selected':''}">${AGE_BAND_LABELS[k]}</button>`).join('')}
+    </div>
+    <div class="panelHead">Skin Tone</div>
+    <div class="swatchRow">${SKIN_TONES.map((c,i)=>`<div class="swatch ${s.appearance.skin===i?'sel':''}" data-swatch="skin" data-i="${i}" style="background:${c}"></div>`).join('')}</div>
+    <div class="panelHead">Hair Color</div>
+    <div class="swatchRow">${HAIR_COLORS.map((c,i)=>`<div class="swatch ${s.appearance.hairColor===i?'sel':''}" data-swatch="hairColor" data-i="${i}" style="background:${c}"></div>`).join('')}</div>
+    <div class="panelHead">Eye Color</div>
+    <div class="swatchRow">${EYE_COLORS.map((c,i)=>`<div class="swatch ${s.appearance.eyeColor===i?'sel':''}" data-swatch="eyeColor" data-i="${i}" style="background:${c}"></div>`).join('')}</div>
+    <div class="panelHead">Hair Style</div>
+    <div class="actionRow">
+      ${Object.keys(HAIR_STYLES).map(k=>`<button data-chhair="${k}" class="${s.appearance.hairStyle===k?'selected':''}">${esc(k)}</button>`).join('')}
+    </div>
+    <div class="panelHead">Traits (choose up to 2)</div>
+    <div class="actionRow">
+      ${TRAIT_POOL.map(t=>`<button data-chtrait="${esc(t)}" class="${s.traits.includes(t)?'selected':''}">${esc(t)}</button>`).join('')}
+    </div>
+    <label style="display:flex;align-items:center;gap:8px;margin-top:10px;font-size:12px;color:var(--text-dim)">
+      <input type="checkbox" id="chExceptional" ${s.exceptional?'checked':''}/> Grant exceptional talent (Gifted)
+    </label>
+    <div class="actionRow">
+      <button id="chSubmit" style="background:var(--gold);color:#241a00;font-weight:700">✨ Breathe Life Into Them (20)</button>
+    </div>
+  `);
+  wireCreateHumanModal();
+}
+function wireCreateHumanModal(){
+  const box=document.getElementById('modalBox');
+  document.getElementById('chName').addEventListener('input',(e)=>{ createHumanState.name=e.target.value; });
+  document.getElementById('chRandomName').addEventListener('click',(e)=>{
+    e.preventDefault(); createHumanState.name=choice(FIRST_NAMES); renderCreateHumanModal();
+  });
+  document.getElementById('chTown').addEventListener('change',(e)=>{ createHumanState.townId=e.target.value; });
+  document.getElementById('chExceptional').addEventListener('change',(e)=>{ createHumanState.exceptional=e.target.checked; });
+  box.querySelectorAll('[data-chsex]').forEach(b=>b.addEventListener('click',(e)=>{
+    e.preventDefault(); createHumanState.sex=b.dataset.chsex; renderCreateHumanModal();
+  }));
+  box.querySelectorAll('[data-chage]').forEach(b=>b.addEventListener('click',(e)=>{
+    e.preventDefault(); createHumanState.ageBand=b.dataset.chage; renderCreateHumanModal();
+  }));
+  box.querySelectorAll('[data-swatch]').forEach(el=>el.addEventListener('click',()=>{
+    createHumanState.appearance[el.dataset.swatch]=Number(el.dataset.i); renderCreateHumanModal();
+  }));
+  box.querySelectorAll('[data-chhair]').forEach(b=>b.addEventListener('click',(e)=>{
+    e.preventDefault(); createHumanState.appearance.hairStyle=b.dataset.chhair; renderCreateHumanModal();
+  }));
+  box.querySelectorAll('[data-chtrait]').forEach(b=>b.addEventListener('click',(e)=>{
+    e.preventDefault();
+    const t=b.dataset.chtrait;
+    const idx=createHumanState.traits.indexOf(t);
+    if(idx!==-1) createHumanState.traits.splice(idx,1);
+    else if(createHumanState.traits.length<2) createHumanState.traits.push(t);
+    renderCreateHumanModal();
+  }));
+  document.getElementById('chSubmit').addEventListener('click',(e)=>{ e.preventDefault(); submitCreateHuman(); });
+}
+function submitCreateHuman(){
+  const cost=POWER_BY_ID.createHuman.cost;
+  if(G.favor<cost){ toast('Not enough favor.'); return; }
+  const s=createHumanState;
+  const town=townOf(s.townId);
+  if(!town){ toast('Choose a settlement.'); return; }
+  const name=(s.name||'').trim()||choice(FIRST_NAMES);
+  G.favor-=cost;
+  const age=AGE_BANDS[s.ageBand];
+  const n=makeNpc({age,townId:town.id,techStageIdx:town.techStageIdx,appearance:{...s.appearance},
+    sex:s.sex,name,traits:s.traits,custom:true});
+  if(s.exceptional){
+    n.giftedAtBirth=true; n.talent=clamp(n.talent+50,0,100);
+    if(!n.traits.includes('Gifted')) n.traits.push('Gifted');
+  }
+  addNpcToTown(town,n);
+  town.population++;
+  recordDivine(town,'blessing');
+  log(`You shape ${n.name} by hand and set them among the people of ${town.name}.`,'milestone');
+  createHumanState=null;
+  markDirty('towns'); markDirty('header');
+  openNpcModal(n);
+}
+
 function showOfflineSummary(s){
   if(s.ticks<=0) return;
   openModal(`
