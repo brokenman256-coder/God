@@ -60,8 +60,8 @@ main#mainArea{flex:1;display:flex;min-height:0;}
   background:rgba(20,25,50,.92);border:1px solid var(--gold);color:var(--gold);
   padding:7px 16px;border-radius:20px;font-size:13px;display:none;align-items:center;gap:10px;z-index:15;}
 #targetBanner button{background:var(--bad);color:#fff;border:none;border-radius:12px;padding:3px 10px;font-size:11px;}
-#townViewBar{position:absolute;top:10px;left:10px;background:rgba(20,25,50,.92);border:1px solid var(--gold-dim);
-  color:var(--text);padding:7px 12px;border-radius:10px;font-size:12px;display:none;align-items:center;gap:12px;z-index:15;}
+#townViewBar{position:absolute;top:10px;left:10px;right:10px;background:rgba(20,25,50,.92);border:1px solid var(--gold-dim);
+  color:var(--text);padding:7px 12px;border-radius:10px;font-size:12px;display:none;align-items:center;gap:10px;flex-wrap:wrap;z-index:15;}
 #townViewBar button{background:var(--panel2);color:var(--gold);border:1px solid var(--gold-dim);border-radius:6px;padding:4px 9px;font-size:11px;}
 #townViewBar #townViewName{font-weight:700;color:var(--gold);}
 #townViewBar #townViewClock{color:var(--text-dim);}
@@ -278,7 +278,8 @@ footer#chronicle.collapsed{height:30px;}
     <div id="mapWrap">
       <canvas id="mapCanvas"></canvas>
       <div id="targetBanner"><span id="targetText"></span><button id="cancelTarget">cancel</button></div>
-      <div id="townViewBar"><button id="backToWorld">← Back to World</button><span id="townViewName"></span><span id="townViewClock"></span></div>
+      <div id="townViewBar"><button id="backToWorld">← Back to World</button><span id="townViewName"></span><span id="townViewClock"></span>
+        <button id="focusPrev" title="Previous citizen">◀ Person</button><button id="focusNext" title="Next citizen">Person ▶</button><button id="focusClear" title="Zoom back out">⤢ Zoom out</button></div>
       <div id="tileTip"></div>
       <div id="toast"></div>
       <div id="voidHint">✦ Begin here — open <b>Powers</b> and speak Creation into being →</div>
@@ -348,6 +349,8 @@ const TRAIT_POOL=["Strong","Pious","Cunning","Sickly","Charismatic","Stubborn","
 const SKIN_TONES=['#ffe0bd','#ffcd94','#eaa985','#d08b5b','#a86b3c','#6b4423','#3f2a1a'];
 const HAIR_COLORS=['#1b1b1b','#3a2a1a','#6b4423','#a56b2c','#c9a227','#8b8b8b','#e8dcc8','#7a2020'];
 const EYE_COLORS=['#3a2a1a','#2e5339','#3a5a8c','#5a5a5a','#4a2a5a'];
+const CLOTHING_COLORS=['#7a2020','#20507a','#2e6b3a','#6b4a20','#5a2e6b','#8a8a20','#20696b','#a05a2e','#3a3a5a','#6b6b6b'];
+const BUILDS=['slim','average','broad'];
 const HAIR_STYLES={
   bald:()=>'',
   short:(c)=>`<path d="M18 46 Q20 14 50 14 Q80 14 82 46 Q70 30 50 30 Q30 30 18 46 Z" fill="${c}"/>`,
@@ -355,20 +358,40 @@ const HAIR_STYLES={
   curly:(c)=>`<circle cx="28" cy="34" r="12" fill="${c}"/><circle cx="42" cy="21" r="13" fill="${c}"/><circle cx="58" cy="21" r="13" fill="${c}"/><circle cx="72" cy="34" r="12" fill="${c}"/><circle cx="50" cy="17" r="14" fill="${c}"/>`,
   bun:(c)=>`<path d="M18 46 Q20 16 50 16 Q80 16 82 46 Q70 30 50 30 Q30 30 18 46 Z" fill="${c}"/><circle cx="50" cy="9" r="9" fill="${c}"/>`
 };
-function randomAppearance(){
+/* Appearance space is deliberately wide (7*8*5*4*10*3 = 33,600 combos) and,
+   when a town is given, dedupes against that town's own citizens so no two
+   people in the same country end up looking identical. */
+function randomAppearanceRoll(){
   return {skin:irand(0,SKIN_TONES.length-1),hairColor:irand(0,HAIR_COLORS.length-1),
-    eyeColor:irand(0,EYE_COLORS.length-1),hairStyle:choice(Object.keys(HAIR_STYLES))};
+    eyeColor:irand(0,EYE_COLORS.length-1),hairStyle:choice(Object.keys(HAIR_STYLES)),
+    clothingColor:irand(0,CLOTHING_COLORS.length-1),build:irand(0,BUILDS.length-1)};
+}
+function appearanceSig(app){
+  return `${app.skin}|${app.hairColor}|${app.eyeColor}|${app.hairStyle}|${app.clothingColor}|${app.build}`;
+}
+function randomAppearance(town){
+  if(!town) return randomAppearanceRoll();
+  const used=town._usedAppearanceSigs||(town._usedAppearanceSigs=new Set());
+  let app, sig, tries=0;
+  do{ app=randomAppearanceRoll(); sig=appearanceSig(app); tries++; }
+  while(used.has(sig) && tries<40);
+  used.add(sig);
+  return app;
 }
 function portraitSVG(app,size){
-  app=app||randomAppearance();
+  app=app||randomAppearanceRoll();
   size=size||64;
   const skin=SKIN_TONES[app.skin??0]||SKIN_TONES[0];
   const hairColor=HAIR_COLORS[app.hairColor??0]||HAIR_COLORS[0];
   const eyeColor=EYE_COLORS[app.eyeColor??0]||EYE_COLORS[0];
+  const clothing=CLOTHING_COLORS[app.clothingColor??0]||CLOTHING_COLORS[0];
+  const buildScale=[0.88,1,1.14][app.build??1]||1;
   const hairFn=HAIR_STYLES[app.hairStyle]||HAIR_STYLES.short;
+  const bw=25*buildScale;
   return `<svg viewBox="0 0 100 100" width="${size}" height="${size}" xmlns="http://www.w3.org/2000/svg">
     <rect width="100" height="100" rx="14" fill="#0d1226"/>
-    <ellipse cx="50" cy="62" rx="25" ry="29" fill="${skin}"/>
+    <path d="M20 100 Q22 78 50 78 Q78 78 80 100 Z" fill="${clothing}"/>
+    <ellipse cx="50" cy="62" rx="${bw}" ry="29" fill="${skin}"/>
     <ellipse cx="38" cy="56" rx="3.2" ry="4" fill="${eyeColor}"/>
     <ellipse cx="62" cy="56" rx="3.2" ry="4" fill="${eyeColor}"/>
     <path d="M42 73 Q50 79 58 73" stroke="#5a3a28" stroke-width="2.2" fill="none" stroke-linecap="round"/>
@@ -409,6 +432,13 @@ const BIRTH_RATE_MULT=[1.35,1.28,1.2,1.15,1.1,1.0,0.85,0.65,0.55,0.45,0.4];
    real-world demographic transition, not just biology. */
 const MAX_FAMILY_SIZE=[8,8,7,7,6,5,4,3,2,2,2];
 const ATHEIST_CHANCE=[0.03,0.04,0.05,0.06,0.07,0.1,0.15,0.27,0.33,0.42,0.5];
+/* Each country is a closed population that should settle around a stable
+   carrying capacity rather than growing forever: births taper off as a
+   country nears POP_CAP (logistic growth), and crowding above the cap
+   raises mortality until births and deaths balance back out near 1000. */
+const POP_CAP=1000;
+function homeostasisFactor(pop){ return clamp(1-pop/POP_CAP,0,1); }
+function crowdingFactor(pop){ return pop>POP_CAP?1+((pop-POP_CAP)/POP_CAP)*1.6:1; }
 
 const GOVERNMENT_TYPES={
   chiefdom:{name:'Chiefdom',taxRate:0.05,corruption:0.3,unrestDecay:0.15,warPropensity:1.1},
@@ -744,7 +774,7 @@ function makeNpc(opts){
     role:'commoner', notable:false, title:null, giftedAtBirth:false,
     relationship:{status:'single'}, parents:opts.parents||[], children:[],
     blessCount:0, curseCount:0, disease:false, birthTick:G.tickCount, lastBirthTick:0,
-    appearance:opts.appearance||randomAppearance(), custom:!!opts.custom,
+    appearance:opts.appearance||randomAppearance(townOf(opts.townId)), custom:!!opts.custom,
     job:'unemployed', workplaceId:null, wealth:irand(5,25),
     curiosityBaseline, curiosity:curiosityBaseline,
     frozen:false, grantedPowers:[]
@@ -962,12 +992,13 @@ function stepTown(town){
   const foodStressFactor=hungry?1.8:(town.food>town.foodCap*0.5?0.85:1);
   const diseaseFactor=activeDisease(town)?1.6:1;
   const warDeathFactor=town.atWarWith.length?1.3:1;
-  const dailyDeathRate=(1/le/365)*foodStressFactor*diseaseFactor*warDeathFactor;
+  const crowding=crowdingFactor(town.population);
+  const dailyDeathRate=(1/le/365)*foodStressFactor*diseaseFactor*warDeathFactor*crowding;
   const untrackedDeaths=untracked*dailyDeathRate;
 
   const dailyBirthRate=(0.028*BIRTH_RATE_MULT[town.techStageIdx])/365;
   const foodBirthFactor=town.food>town.foodCap*0.3?1:0.5;
-  const untrackedBirths=untracked*dailyBirthRate*foodBirthFactor*(1-town.unrest/300);
+  const untrackedBirths=untracked*dailyBirthRate*foodBirthFactor*(1-town.unrest/300)*homeostasisFactor(town.population);
 
   town.population=Math.max(0,Math.round(trackedAlive+untracked+(untrackedBirths-untrackedDeaths)));
   if(town.population<=0){ town.alive=false; log(`${town.name} has fallen silent, its people gone.`,'death'); }
@@ -1152,7 +1183,7 @@ function updateRelationship(n,town){
       const spacingOk=(G.tickCount-(n.lastBirthTick||0))>650 && (G.tickCount-(p.lastBirthTick||0))>650;
       const familyCap=MAX_FAMILY_SIZE[town.techStageIdx];
       if(fert>0 && spacingOk && n.children.length<familyCap){
-        const chance=0.006*fert*BIRTH_RATE_MULT[town.techStageIdx]*(town.food>town.foodCap*0.3?1:0.4)-town.unrest/8000;
+        const chance=0.006*fert*BIRTH_RATE_MULT[town.techStageIdx]*(town.food>town.foodCap*0.3?1:0.4)*homeostasisFactor(town.population)-town.unrest/8000;
         if(Math.random()<Math.max(0,chance)) maybeHaveChild(n,p,town);
       }
     }
@@ -1216,6 +1247,7 @@ function maybeDie(n,town){
   else if(n.health<40) p+=0.0008;
   if(n.disease) p+=0.004;
   if(town.atWarWith.length && Math.random()<0.15) p+=0.0018;
+  if(town.population>POP_CAP) p+=0.0004*((town.population-POP_CAP)/POP_CAP);
   if(n.traits.includes('Sickly')) p*=1.3;
   if(n.traits.includes('Strong')) p*=0.85;
   p=clamp(p,0,0.95);
@@ -2003,21 +2035,41 @@ function getTownViewMetrics(){
   return {scale:size/TOWN_VIEW_SIZE,offsetX,offsetY,size};
 }
 const JOB_COLORS={farmer:'#8a9b4f',miner:'#8a6a4a',artisan:'#a0632f',merchant:'#7a4fa0',laborer:'#6b7280',unemployed:'#56658a'};
-/* Real emoji people instead of hand-drawn shapes -- skin-tone accurate via the
-   standard Fitzpatrick modifiers, age-appropriate base figure, rendered by the
-   platform's own color emoji font (the same one already drawing buildings). */
-const SKIN_MODIFIERS=['\u{1F3FB}','\u{1F3FB}','\u{1F3FC}','\u{1F3FD}','\u{1F3FE}','\u{1F3FF}','\u{1F3FF}'];
 const EMOJI_FONT='"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",sans-serif';
-function npcEmoji(n){
-  const mod=SKIN_MODIFIERS[n.appearance?.skin??2]||'';
-  let base='\u{1F9D1}';
-  if(n.status==='infant') base='\u{1F476}';
-  else if(n.status==='child') base='\u{1F9D2}';
-  else if(n.status==='elder') base='\u{1F9D3}';
-  return base+mod;
+/* Each citizen is drawn from their own appearance data (skin/hair/eyes/clothing/
+   build) instead of a shared emoji glyph, so two citizens never render identically
+   unless their whole appearance signature collided (see randomAppearance's dedupe).
+   `detailed` is an LOD switch: full face+hair at normal/close zoom, a plain silhouette
+   when a country's population is too large to render every face at once at a glance. */
+function drawPersonFigure(r,app,status,detailed){
+  app=app||{};
+  const skin=SKIN_TONES[app.skin??2]||SKIN_TONES[2];
+  const clothing=CLOTHING_COLORS[app.clothingColor??0]||CLOTHING_COLORS[0];
+  const buildScale=[0.84,1,1.18][app.build??1]||1;
+  const isChild=status==='infant'||status==='child';
+  const headR=r*(isChild?0.6:0.48)*(isChild?1:buildScale*0.5+0.5);
+  const bodyW=r*0.62*buildScale*(isChild?0.72:1);
+  const bodyH=r*(isChild?1.05:1.42);
+  ctx.beginPath();
+  ctx.ellipse(0,r*0.5,bodyW,bodyH*0.5,0,0,Math.PI*2);
+  ctx.fillStyle=clothing; ctx.fill();
+  ctx.beginPath();
+  ctx.arc(0,-r*0.28,headR,0,Math.PI*2);
+  ctx.fillStyle=skin; ctx.fill();
+  if(detailed){
+    const hairColor=HAIR_COLORS[app.hairColor??0]||HAIR_COLORS[0];
+    if(app.hairStyle && app.hairStyle!=='bald'){
+      ctx.beginPath();
+      ctx.arc(0,-r*0.28-headR*0.3,headR*0.98,Math.PI,Math.PI*2);
+      ctx.fillStyle=hairColor; ctx.fill();
+    }
+    const eyeColor=EYE_COLORS[app.eyeColor??0]||EYE_COLORS[0];
+    ctx.fillStyle=eyeColor;
+    ctx.fillRect(-headR*0.42,-r*0.3,headR*0.24,headR*0.22);
+    ctx.fillRect(headR*0.18,-r*0.3,headR*0.24,headR*0.22);
+  }
 }
-function drawNpcDot(cx,cy,r,n,walking,walkPhase){
-  const size=r*2.9;
+function drawNpcDot(cx,cy,r,n,walking,walkPhase,detailed){
   const bob=walking?Math.abs(Math.sin(walkPhase||0))*r*0.18:0;
   const sway=walking?Math.sin(walkPhase||0)*0.1:0;
   if(n.frozen){
@@ -2028,9 +2080,7 @@ function drawNpcDot(cx,cy,r,n,walking,walkPhase){
   ctx.save();
   ctx.translate(cx,cy-bob);
   ctx.rotate(sway);
-  ctx.font=`${size}px ${EMOJI_FONT}`;
-  ctx.textAlign='center'; ctx.textBaseline='middle';
-  ctx.fillText(npcEmoji(n),0,0);
+  drawPersonFigure(r,n.appearance,n.status,detailed!==false);
   ctx.restore();
   ctx.beginPath(); ctx.arc(cx,cy+r*1.05,r*0.22,0,Math.PI*2);
   ctx.fillStyle=JOB_COLORS[n.job]||JOB_COLORS.unemployed; ctx.fill();
@@ -2072,7 +2122,28 @@ function stepTownMotion(m,home,workplace,awake,dt,now){
   if(step>=dist){ m.x=m.targetX; m.y=m.targetY; }
   else { m.x+=dx/dist*step; m.y+=dy/dist*step; }
 }
+/* Focus camera: tapping a citizen (or Prev/Next) smoothly zooms and centers on
+   them, like tapping a pin on a map -- a clean, close, individual view of that
+   one person instead of a crowd. Eases toward its target every frame so it
+   never jump-cuts. Cleared whenever the town view is entered/exited. */
+let townFocusId=null;
+let townCam={scale:1,cx:TOWN_VIEW_SIZE/2,cy:TOWN_VIEW_SIZE/2};
+const FOCUS_ZOOM=9;
+function focusOnCitizen(id){ townFocusId=id; }
+function clearCitizenFocus(){ townFocusId=null; }
+function cycleFocus(dir){
+  const town=townOf(G.viewingTownId); if(!town) return;
+  const alive=town.npcIds.filter(id=>{const n=G.npcs[id]; return n&&n.alive;});
+  if(!alive.length) return;
+  let idx=alive.indexOf(townFocusId);
+  idx=idx===-1?0:(idx+dir+alive.length)%alive.length;
+  townFocusId=alive[idx];
+}
 function drawTownView(town){
+  if(townFocusId){
+    const f=G.npcs[townFocusId];
+    if(!f||!f.alive||f.townId!==town.id) townFocusId=null;
+  }
   const {scale,offsetX,offsetY,size}=getTownViewMetrics();
   const phase=dayPhase();
   const b=dayBrightness(phase);
@@ -2087,25 +2158,50 @@ function drawTownView(town){
     ctx.fillStyle=`rgba(255,255,255,${0.15+(0.4-b)})`;
     for(let i=0;i<70;i++){ ctx.fillRect(starRng()*canvas.width,starRng()*canvas.height*0.6,1.6,1.6); }
   }
-  ctx.fillStyle='rgba(0,0,0,0.15)';
-  ctx.fillRect(offsetX,offsetY,size,size);
-  ctx.strokeStyle='rgba(232,196,104,0.25)'; ctx.lineWidth=2;
-  ctx.strokeRect(offsetX,offsetY,size,size);
 
-  const fontSize=Math.max(14,26*scale);
-  ctx.textAlign='center'; ctx.textBaseline='middle';
-  for(const bld of town.buildings){
-    const bx=offsetX+bld.x*scale, by=offsetY+bld.y*scale;
-    ctx.font=`${fontSize}px serif`;
-    ctx.fillText(BUILDING_TYPES[bld.type]?.icon||'🏠',bx,by);
-  }
-
-  townViewScreenPos={};
   const npcs=town.npcIds.map(id=>G.npcs[id]).filter(n=>n&&n.alive);
   const awake=b>0.32;
   const now=performance.now();
   const dt=lastTownFrameTs?Math.min(0.1,(now-lastTownFrameTs)/1000):0;
   lastTownFrameTs=now;
+
+  const focusNpc=townFocusId?G.npcs[townFocusId]:null;
+  let target={scale:1,cx:TOWN_VIEW_SIZE/2,cy:TOWN_VIEW_SIZE/2};
+  if(focusNpc){
+    let m=townMotionState[focusNpc.id];
+    if(!m){
+      let home=town.buildings.find(bd=>bd.id===focusNpc.homeId);
+      if(!home){ ensureHome(focusNpc,town); home=town.buildings.find(bd=>bd.id===focusNpc.homeId); }
+      const hx=home?home.x:TOWN_VIEW_SIZE/2, hy=home?home.y:TOWN_VIEW_SIZE/2;
+      m={x:hx,y:hy,targetX:hx,targetY:hy,state:'waiting',waitUntil:0,walkPhase:0}; townMotionState[focusNpc.id]=m;
+    }
+    target={scale:FOCUS_ZOOM,cx:m.x,cy:m.y};
+  }
+  const ease=1-Math.exp(-dt*5.5);
+  townCam.scale=lerp(townCam.scale,target.scale,ease);
+  townCam.cx=lerp(townCam.cx,target.cx,ease);
+  townCam.cy=lerp(townCam.cy,target.cy,ease);
+  const camScale=scale*townCam.scale;
+  const camOffsetX=canvas.width/2-townCam.cx*camScale;
+  const camOffsetY=canvas.height/2-townCam.cy*camScale;
+
+  ctx.fillStyle='rgba(0,0,0,0.15)';
+  ctx.fillRect(camOffsetX,camOffsetY,TOWN_VIEW_SIZE*camScale,TOWN_VIEW_SIZE*camScale);
+  ctx.strokeStyle='rgba(232,196,104,0.25)'; ctx.lineWidth=2;
+  ctx.strokeRect(camOffsetX,camOffsetY,TOWN_VIEW_SIZE*camScale,TOWN_VIEW_SIZE*camScale);
+
+  const fontSize=Math.max(10,26*camScale);
+  ctx.textAlign='center'; ctx.textBaseline='middle';
+  for(const bld of town.buildings){
+    const bx=camOffsetX+bld.x*camScale, by=camOffsetY+bld.y*camScale;
+    if(bx<-40||bx>canvas.width+40||by<-40||by>canvas.height+40) continue;
+    ctx.font=`${fontSize}px serif`;
+    ctx.fillText(BUILDING_TYPES[bld.type]?.icon||'🏠',bx,by);
+  }
+
+  townViewScreenPos={};
+  const crowded=npcs.length>150;
+  const rBase=9*(1+Math.min(townCam.scale-1,4)*0.5);
   for(const n of npcs){
     let home=town.buildings.find(bd=>bd.id===n.homeId);
     if(!home){ ensureHome(n,town); home=town.buildings.find(bd=>bd.id===n.homeId); }
@@ -2117,25 +2213,29 @@ function drawTownView(town){
       const workplace=hasJob?town.buildings.find(bd=>bd.id===n.workplaceId):null;
       stepTownMotion(m,{x:hx,y:hy},workplace,awake,dt,now);
     }
-    const sx=offsetX+m.x*scale, sy=offsetY+m.y*scale;
-    drawNpcDot(sx,sy,9,n,m.state==='walking',m.walkPhase);
+    const sx=camOffsetX+m.x*camScale, sy=camOffsetY+m.y*camScale;
+    if(sx<-40||sx>canvas.width+40||sy<-40||sy>canvas.height+40) continue;
+    const detailed=!crowded||n.id===townFocusId||townCam.scale>1.6;
+    drawNpcDot(sx,sy,rBase,n,m.state==='walking',m.walkPhase,detailed);
     townViewScreenPos[n.id]={x:sx,y:sy};
   }
 
   const nameEl=document.getElementById('townViewName');
   const clockEl=document.getElementById('townViewClock');
-  if(nameEl) nameEl.textContent=town.name;
+  if(nameEl) nameEl.textContent=focusNpc?`${town.name} — ${focusNpc.custom?'✦ ':''}${focusNpc.name}`:`${town.name} (${npcs.length})`;
   if(clockEl) clockEl.textContent=b>0.5?'☀️ Day':'🌙 Night';
 }
 function enterTownView(townId){
   clearPending();
   G.viewMode='town'; G.viewingTownId=townId;
   townMotionState={}; lastTownFrameTs=null;
+  townFocusId=null; townCam={scale:1,cx:TOWN_VIEW_SIZE/2,cy:TOWN_VIEW_SIZE/2};
   document.getElementById('townViewBar').style.display='flex';
   closeModal();
 }
 function exitTownView(){
   G.viewMode='world'; G.viewingTownId=null;
+  townFocusId=null;
   document.getElementById('townViewBar').style.display='none';
 }
 
@@ -2154,7 +2254,7 @@ function handleMapTap(clientX,clientY){
       const d=(cx-p.x)*(cx-p.x)+(cy-p.y)*(cy-p.y);
       if(d<closestD){ closestD=d; closest=n; }
     }
-    if(closest) openNpcModal(closest);
+    if(closest){ focusOnCitizen(closest.id); openNpcModal(closest); }
     return;
   }
   const {tileSize,offsetX,offsetY}=getMapMetrics();
@@ -2758,6 +2858,9 @@ function initUI(){
 
   wireMapInput();
   document.getElementById('backToWorld').addEventListener('click',exitTownView);
+  document.getElementById('focusNext').addEventListener('click',()=>cycleFocus(1));
+  document.getElementById('focusPrev').addEventListener('click',()=>cycleFocus(-1));
+  document.getElementById('focusClear').addEventListener('click',clearCitizenFocus);
   window.addEventListener('resize',resizeCanvas);
 }
 
