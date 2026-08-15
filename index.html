@@ -2002,23 +2002,72 @@ function getTownViewMetrics(){
   const offsetX=(canvas.width-size)/2, offsetY=(canvas.height-size)/2;
   return {scale:size/TOWN_VIEW_SIZE,offsetX,offsetY,size};
 }
-function drawNpcDot(cx,cy,r,n){
+const JOB_COLORS={farmer:'#8a9b4f',miner:'#8a6a4a',artisan:'#a0632f',merchant:'#7a4fa0',laborer:'#6b7280',unemployed:'#56658a'};
+function ctxRoundRect(x,y,w,h,r){
+  ctx.beginPath();
+  ctx.moveTo(x+r,y);
+  ctx.arcTo(x+w,y,x+w,y+h,r);
+  ctx.arcTo(x+w,y+h,x,y+h,r);
+  ctx.arcTo(x,y+h,x,y,r);
+  ctx.arcTo(x,y,x+w,y,r);
+  ctx.closePath();
+}
+function drawNpcDot(cx,cy,r,n,walking,walkPhase){
   const skin=SKIN_TONES[n.appearance?.skin??0]||SKIN_TONES[0];
   const hair=HAIR_COLORS[n.appearance?.hairColor??0]||HAIR_COLORS[0];
-  ctx.beginPath(); ctx.arc(cx,cy,r,0,Math.PI*2);
+  const clothes=JOB_COLORS[n.job]||JOB_COLORS.unemployed;
+  const swing=walking?Math.sin(walkPhase||0)*r*0.4:0;
+  const legW=r*0.3, legH=r*0.62;
+  ctx.fillStyle='#26262e';
+  ctx.fillRect(cx-r*0.32-legW/2,cy+r*0.2+swing*0.35,legW,legH);
+  ctx.fillRect(cx+r*0.32-legW/2,cy+r*0.2-swing*0.35,legW,legH);
+  ctxRoundRect(cx-r*0.62,cy-r*0.35,r*1.24,r*1.05,r*0.32);
+  ctx.fillStyle=clothes; ctx.fill();
+  ctx.beginPath(); ctx.arc(cx,cy-r*0.78,r*0.58,0,Math.PI*2);
   ctx.fillStyle=skin; ctx.fill();
-  ctx.strokeStyle='rgba(0,0,0,0.45)'; ctx.lineWidth=1; ctx.stroke();
-  ctx.beginPath(); ctx.arc(cx,cy-r*0.5,r*0.78,Math.PI,0);
+  ctx.strokeStyle='rgba(0,0,0,0.4)'; ctx.lineWidth=0.75; ctx.stroke();
+  ctx.beginPath(); ctx.arc(cx,cy-r*1.08,r*0.54,Math.PI,0);
   ctx.fillStyle=hair; ctx.fill();
   if(n.notable){
-    ctx.beginPath(); ctx.arc(cx,cy,r+2.5,0,Math.PI*2);
+    ctx.beginPath(); ctx.arc(cx,cy-r*0.78,r*0.58+2,0,Math.PI*2);
     ctx.strokeStyle='rgba(232,196,104,0.9)'; ctx.lineWidth=1.5; ctx.stroke();
   }
   if(n.frozen){
-    ctx.beginPath(); ctx.arc(cx,cy,r+1.5,0,Math.PI*2);
-    ctx.fillStyle='rgba(140,210,255,0.35)'; ctx.fill();
+    ctx.beginPath(); ctx.arc(cx,cy-r*0.15,r*1.15,0,Math.PI*2);
+    ctx.fillStyle='rgba(140,210,255,0.3)'; ctx.fill();
     ctx.strokeStyle='rgba(180,225,255,0.9)'; ctx.lineWidth=1.5; ctx.stroke();
   }
+}
+
+/* Real point-to-point walking instead of an orbiting wobble: each tracked citizen
+   has a small persistent motion state (position, current target, idle timer) that
+   advances by elapsed wall-clock time every frame, purely cosmetic like the rest
+   of the town view. */
+const WALK_SPEED=34;
+let townMotionState={};
+let lastTownFrameTs=null;
+function randomPointNear(anchor,radius){
+  const a=Math.random()*Math.PI*2, d=Math.random()*radius;
+  return {x:clamp(anchor.x+Math.cos(a)*d,24,TOWN_VIEW_SIZE-24),y:clamp(anchor.y+Math.sin(a)*d,24,TOWN_VIEW_SIZE-24)};
+}
+function stepTownMotion(m,home,workplace,awake,dt,now){
+  if(m.state==='waiting'){
+    if(now>=m.waitUntil){
+      const dest=awake?randomPointNear(workplace||home,workplace?20:44):home;
+      m.targetX=dest.x; m.targetY=dest.y; m.state='walking';
+    }
+    return;
+  }
+  const dx=m.targetX-m.x, dy=m.targetY-m.y, dist=Math.hypot(dx,dy);
+  if(dist<2){
+    m.state='waiting';
+    m.waitUntil=now+rand(awake?700:2200,awake?2600:5200);
+    return;
+  }
+  m.walkPhase=(m.walkPhase||0)+dt*9;
+  const step=WALK_SPEED*dt;
+  if(step>=dist){ m.x=m.targetX; m.y=m.targetY; }
+  else { m.x+=dx/dist*step; m.y+=dy/dist*step; }
 }
 function drawTownView(town){
   const {scale,offsetX,offsetY,size}=getTownViewMetrics();
@@ -2051,22 +2100,22 @@ function drawTownView(town){
   townViewScreenPos={};
   const npcs=town.npcIds.map(id=>G.npcs[id]).filter(n=>n&&n.alive);
   const awake=b>0.32;
+  const now=performance.now();
+  const dt=lastTownFrameTs?Math.min(0.1,(now-lastTownFrameTs)/1000):0;
+  lastTownFrameTs=now;
   for(const n of npcs){
     let home=town.buildings.find(bd=>bd.id===n.homeId);
     if(!home){ ensureHome(n,town); home=town.buildings.find(bd=>bd.id===n.homeId); }
     const hx=home?home.x:TOWN_VIEW_SIZE/2, hy=home?home.y:TOWN_VIEW_SIZE/2;
-    let px=hx,py=hy;
-    if(awake && !n.frozen){
-      const seed=hashStr(n.id);
+    let m=townMotionState[n.id];
+    if(!m){ m={x:hx,y:hy,targetX:hx,targetY:hy,state:'waiting',waitUntil:0,walkPhase:0}; townMotionState[n.id]=m; }
+    if(!n.frozen){
       const hasJob=n.job&&n.job!=='laborer'&&n.job!=='unemployed';
       const workplace=hasJob?town.buildings.find(bd=>bd.id===n.workplaceId):null;
-      const tx=workplace?workplace.x:hx, ty=workplace?workplace.y:hy;
-      const wobble=workplace?14:24+(n.curiosity/100)*24;
-      px=tx+Math.sin(phase*Math.PI*2*3+seed)*wobble;
-      py=ty+Math.cos(phase*Math.PI*2*2.3+seed*1.7)*wobble;
+      stepTownMotion(m,{x:hx,y:hy},workplace,awake,dt,now);
     }
-    const sx=offsetX+px*scale, sy=offsetY+py*scale;
-    drawNpcDot(sx,sy,7,n);
+    const sx=offsetX+m.x*scale, sy=offsetY+m.y*scale;
+    drawNpcDot(sx,sy,9,n,m.state==='walking',m.walkPhase);
     townViewScreenPos[n.id]={x:sx,y:sy};
   }
 
@@ -2078,6 +2127,7 @@ function drawTownView(town){
 function enterTownView(townId){
   clearPending();
   G.viewMode='town'; G.viewingTownId=townId;
+  townMotionState={}; lastTownFrameTs=null;
   document.getElementById('townViewBar').style.display='flex';
   closeModal();
 }
