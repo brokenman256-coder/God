@@ -44,6 +44,9 @@ header#topbar h1{font-size:18px;margin:0;letter-spacing:3px;color:var(--gold);
   padding:4px 6px;font-size:12px;}
 #saveInd{font-size:11px;color:var(--text-dim);opacity:0;transition:opacity .3s;white-space:nowrap;}
 #saveInd.show{opacity:1;}
+#resetWorldBtn{background:var(--panel2);border:1px solid var(--border);color:var(--text-dim);
+  border-radius:6px;padding:4px 9px;font-size:11px;white-space:nowrap;}
+#resetWorldBtn:hover{border-color:var(--bad);color:var(--bad);}
 
 /* MAIN */
 main#mainArea{flex:1;display:flex;min-height:0;}
@@ -85,6 +88,21 @@ aside#sidebar{width:360px;flex-shrink:0;display:flex;flex-direction:column;backg
 #tabContent{flex:1;overflow-y:auto;min-height:0;}
 .tabpanel{display:none;padding:10px;}
 .tabpanel.active{display:block;}
+#panel-console.active{display:flex;flex-direction:column;height:100%;padding:0;}
+#consoleOutput{flex:1;overflow-y:auto;padding:10px;font-family:'Courier New',monospace;font-size:12px;
+  line-height:1.6;color:var(--text-dim);}
+#consoleOutput .cLine{white-space:pre-wrap;word-break:break-word;margin-bottom:2px;}
+#consoleOutput .cCmd{color:var(--gold);}
+#consoleOutput .cResult{color:var(--good);}
+#consoleOutput .cError{color:var(--bad);}
+#consoleOutput .cInfo{color:var(--text-dim);}
+#consoleInputRow{display:flex;align-items:center;gap:6px;border-top:1px solid var(--border);
+  padding:8px 10px;flex-shrink:0;background:var(--panel2);}
+#consolePrompt{color:var(--gold);font-family:'Courier New',monospace;font-weight:700;}
+#consoleInput{flex:1;background:#05060c;border:1px solid var(--border);color:var(--text);
+  font-family:'Courier New',monospace;font-size:12px;border-radius:6px;padding:7px 9px;}
+#consoleRun{background:var(--gold);color:#241a00;border:none;border-radius:6px;padding:7px 12px;
+  font-size:12px;font-weight:700;}
 .panelHead{font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-dim);
   margin:12px 0 6px;}
 .panelHead:first-child{margin-top:0;}
@@ -249,6 +267,7 @@ footer#chronicle.collapsed{height:30px;}
       <button data-speed="10">10x</button>
     </div>
     <span id="saveInd">saved</span>
+    <button id="resetWorldBtn" title="Wipe this save and start over">🔄 New World</button>
   </header>
 
   <main id="mainArea">
@@ -266,12 +285,21 @@ footer#chronicle.collapsed{height:30px;}
         <button class="tab" data-tab="prayers">🙏 Prayers<span class="badge" id="prayerBadge" style="display:none">0</span></button>
         <button class="tab" data-tab="specimen">🧬 Specimen</button>
         <button class="tab" data-tab="towns">🏘 Peoples</button>
+        <button class="tab" data-tab="console">⌘ Console</button>
       </div>
       <div id="tabContent">
         <section class="tabpanel active" id="panel-powers"></section>
         <section class="tabpanel" id="panel-prayers"></section>
         <section class="tabpanel" id="panel-specimen"></section>
         <section class="tabpanel" id="panel-towns"></section>
+        <section class="tabpanel" id="panel-console">
+          <div id="consoleOutput"><div class="cLine cInfo">Divine Console — direct, unrestricted access to your world. Type help() to begin.</div></div>
+          <div id="consoleInputRow">
+            <span id="consolePrompt">›</span>
+            <input id="consoleInput" type="text" autocomplete="off" spellcheck="false" placeholder="help()"/>
+            <button id="consoleRun">Run</button>
+          </div>
+        </section>
       </div>
     </aside>
   </main>
@@ -457,6 +485,12 @@ const POWERS=[
    desc:"Grant a newborn exceptional talent. Target a child from a town's citizen list."},
  {id:'anointMessiah',name:'Anoint Messiah',icon:'👑',cat:'Blessing',cost:25,target:'npc',minEra:ERA.RISE,
    desc:'Anoint an adult to spread your worship across the world.'},
+ {id:'freezePerson',name:'Freeze Person',icon:'🧊',cat:'Blessing',cost:15,target:'npc',minEra:ERA.RISE,
+   desc:'Stop a person exactly as they are, outside the flow of time. Casting again thaws them.'},
+ {id:'grantPower',name:'Grant Power',icon:'🪄',cat:'Blessing',cost:20,target:'npc',minEra:ERA.RISE,
+   desc:'Bestow one of your divine gifts on a mortal, who may channel it in your name.'},
+ {id:'freezeTime',name:'Freeze Time',icon:'❄️',cat:'Blessing',cost:20,target:'none',minEra:ERA.RISE,
+   desc:'Halt the flow of time across the entire world. Casting again lets it flow.'},
  {id:'sendGuards',name:'Send Guards',icon:'🛡️',cat:'Civilization',cost:10,target:'town',minEra:ERA.RISE,
    desc:"Bolster a settlement's police against crime."},
  {id:'sendHealers',name:'Send Healers',icon:'⚕️',cat:'Civilization',cost:12,target:'town',minEra:ERA.RISE,
@@ -707,7 +741,8 @@ function makeNpc(opts){
     blessCount:0, curseCount:0, disease:false, birthTick:G.tickCount, lastBirthTick:0,
     appearance:opts.appearance||randomAppearance(), custom:!!opts.custom,
     job:'unemployed', workplaceId:null, wealth:irand(5,25),
-    curiosityBaseline, curiosity:curiosityBaseline
+    curiosityBaseline, curiosity:curiosityBaseline,
+    frozen:false, grantedPowers:[]
   };
   updateLifeStage(n);
   return n;
@@ -1035,6 +1070,8 @@ function moodDelta(n,town){
 }
 
 function stepNpc(n,town,hungry){
+  if(n.frozen) return;
+  if(n.grantedPowers&&n.grantedPowers.length&&(n.status==='adult'||n.status==='elder')) maybeChannelGrantedPower(n,town);
   n.age+=1/365;
   updateLifeStage(n);
   n.hunger=clamp(n.hunger+(hungry?2.4:-1.6)+rand(-0.4,0.4),0,100);
@@ -1506,6 +1543,11 @@ function doQuickenEvolution(){
   markDirty('specimen'); markDirty('header');
   if(G.evolutionPoints>=100 && !G._mutationModalOpen) showMutationChoice();
 }
+function doFreezeTime(){
+  G.paused=!G.paused;
+  log(G.paused?'Time itself grinds to a halt at your command.':'Time flows once more.','milestone');
+  toast(G.paused?'Time is frozen.':'Time flows again.');
+}
 function applyMutation(opt){
   G.evolutionTraits.push(opt.name);
   G.evolutionStage++;
@@ -1538,6 +1580,20 @@ function damageTownsNear(cx,cy,radius,popLossFrac,unrestAdd){
   }
 }
 
+const GRANTABLE_POWERS=['rain','lightning','sendHealers'];
+function maybeChannelGrantedPower(n,town){
+  for(const powerId of n.grantedPowers){
+    const power=POWER_BY_ID[powerId];
+    if(!power) continue;
+    if(Math.random()<0.0015){
+      if(power.target==='tile') applyTilePower(power,town.x,town.y);
+      else if(power.target==='town') applyTownPower(power,town);
+      log(`${n.name}, chosen of ${power.name}, channels your gift over ${town.name}.`,'notable');
+      markDirty('towns');
+      return;
+    }
+  }
+}
 function applyTilePower(power,tx,ty){
   const g=G.grid;
   if(power.id==='rain'){ setOverlayRegion(tx,ty,4,'rain',10); log('Rain falls upon the land at your command.','general',{silent:true}); toast('Rain called.'); }
@@ -1636,6 +1692,10 @@ function applyNpcPower(power,n){
     n.notable=true; n.role='messiah'; n.title='Messiah';
     if(!town.notableIds.includes(n.id)) town.notableIds.push(n.id);
     log(`${n.name} is anointed Messiah, spreading your worship across the world.`,'milestone');
+  } else if(power.id==='freezePerson'){
+    n.frozen=!n.frozen;
+    log(n.frozen?`${n.name} is frozen outside the flow of time.`:`${n.name} thaws, and time takes hold of them again.`,'general',{silent:true});
+    toast(n.frozen?`${n.name} frozen.`:`${n.name} unfrozen.`);
   }
   recordDivine(town,'blessing');
   markDirty('towns');
@@ -1694,6 +1754,7 @@ function selectPower(id){
     G.favor-=p.cost;
     if(p.id==='seedLife') doSeedLife();
     else if(p.id==='quickenEvolution') doQuickenEvolution();
+    else if(p.id==='freezeTime') doFreezeTime();
     markDirty('header');
     return;
   }
@@ -1881,6 +1942,11 @@ function drawNpcDot(cx,cy,r,n){
     ctx.beginPath(); ctx.arc(cx,cy,r+2.5,0,Math.PI*2);
     ctx.strokeStyle='rgba(232,196,104,0.9)'; ctx.lineWidth=1.5; ctx.stroke();
   }
+  if(n.frozen){
+    ctx.beginPath(); ctx.arc(cx,cy,r+1.5,0,Math.PI*2);
+    ctx.fillStyle='rgba(140,210,255,0.35)'; ctx.fill();
+    ctx.strokeStyle='rgba(180,225,255,0.9)'; ctx.lineWidth=1.5; ctx.stroke();
+  }
 }
 function drawTownView(town){
   const {scale,offsetX,offsetY,size}=getTownViewMetrics();
@@ -1918,7 +1984,7 @@ function drawTownView(town){
     if(!home){ ensureHome(n,town); home=town.buildings.find(bd=>bd.id===n.homeId); }
     const hx=home?home.x:TOWN_VIEW_SIZE/2, hy=home?home.y:TOWN_VIEW_SIZE/2;
     let px=hx,py=hy;
-    if(awake){
+    if(awake && !n.frozen){
       const seed=hashStr(n.id);
       const hasJob=n.job&&n.job!=='laborer'&&n.job!=='unemployed';
       const workplace=hasJob?town.buildings.find(bd=>bd.id===n.workplaceId):null;
@@ -2134,11 +2200,12 @@ function openNpcModal(npc){
     <div style="display:flex;align-items:center;gap:12px;margin-bottom:4px">
       <div class="modalPortrait">${portraitSVG(npc.appearance,64)}</div>
       <div>
-        <h2 style="margin:0">${npc.custom?'✦ ':''}${esc(npc.name)}</h2>
+        <h2 style="margin:0">${npc.frozen?'🧊 ':''}${npc.custom?'✦ ':''}${esc(npc.name)}</h2>
         <div class="mSub" style="margin:2px 0 0">${esc(npc.status)}, age ${Math.floor(npc.age)} — ${esc(town?town.name:'')}${npc.notable?' — '+esc(npc.title):''} — ${npc.believer?'Believer':'Atheist'}</div>
         <div class="mSub" style="margin:2px 0 0">${npc.status==='adult'||npc.status==='elder'?capitalize(npc.job)+' • ':''}Wealth ${Math.round(npc.wealth)}</div>
       </div>
     </div>
+    ${npc.frozen?`<div class="pendingBanner"><span>❄️ Frozen outside the flow of time</span></div>`:''}
     ${pendingApplies?`<div class="pendingBanner"><span>Apply ${esc(pending.def.name)} to ${esc(npc.name)}?</span><button data-applynpc="${npc.id}">Apply</button></div>`:''}
     <div class="statRow"><span class="label">Hunger</span><div class="bar"><i style="width:${npc.hunger}%;background:var(--warn)"></i></div></div>
     <div class="statRow"><span class="label">Mood</span><div class="bar"><i style="width:${npc.mood}%;background:var(--good)"></i></div></div>
@@ -2147,12 +2214,31 @@ function openNpcModal(npc){
     <div class="statRow"><span class="label">Talent</span><div class="bar"><i style="width:${npc.talent}%;background:var(--gold)"></i></div></div>
     <div class="statRow"><span class="label">Curiosity</span><div class="bar"><i style="width:${npc.curiosity}%;background:#5bc4e8"></i></div></div>
     <div class="mSub">Traits: ${npc.traits.map(t=>`<span class="traitTag">${esc(t)}</span>`).join('')||'none'}</div>
+    ${npc.grantedPowers&&npc.grantedPowers.length?`<div class="mSub">Channels: ${npc.grantedPowers.map(id=>`<span class="traitTag">${esc(POWER_BY_ID[id]?.name||id)}</span>`).join('')}</div>`:''}
     <div class="mSub">Relationship: ${esc(npc.relationship.status)}${spouse?' to '+esc(spouse.name):''} • Children: ${npc.children.length}</div>
     <div class="actionRow">
       <button data-npcact="bless" data-npc="${npc.id}">😇 Bless (6)</button>
       <button data-npcact="curse" data-npc="${npc.id}">😈 Curse (6)</button>
       <button data-npcact="giftTalent" data-npc="${npc.id}" ${(npc.status==='infant'||npc.status==='child')&&!npc.giftedAtBirth?'':'disabled'}>🎁 Gift Talent (12)</button>
       <button data-npcact="anointMessiah" data-npc="${npc.id}" ${(npc.status==='adult'||npc.status==='elder')?'':'disabled'}>👑 Anoint Messiah (25)</button>
+      <button data-npcact="freezePerson" data-npc="${npc.id}">🧊 ${npc.frozen?'Unfreeze':'Freeze'} (15)</button>
+      <button data-grantpower="${npc.id}" ${(npc.status==='adult'||npc.status==='elder')?'':'disabled'}>🪄 Grant Power (20)</button>
+    </div>
+  `);
+}
+function openGrantPowerModal(npcId){
+  const n=G.npcs[npcId]; if(!n) return;
+  openModal(`
+    <button class="modalClose" data-close="1">×</button>
+    <h2>Grant a Power</h2>
+    <div class="mSub">Choose a gift for ${esc(n.name)} to channel in your name.</div>
+    <div class="mutOpts">
+      ${GRANTABLE_POWERS.map(id=>{
+        const p=POWER_BY_ID[id];
+        const already=n.grantedPowers.includes(id);
+        return `<button class="mutOpt" data-grant="${id}" data-npc="${n.id}" ${already?'disabled':''}>
+          <b>${p.icon} ${esc(p.name)}${already?' (already granted)':''}</b><span>${esc(p.desc)}</span></button>`;
+      }).join('')}
     </div>
   `);
 }
@@ -2343,6 +2429,16 @@ function initUI(){
     e.target.value='';
   });
   document.getElementById('cancelTarget').addEventListener('click',clearPending);
+  document.getElementById('resetWorldBtn').addEventListener('click',()=>{
+    if(confirm('Wipe this world and start a brand new one? This cannot be undone.')) resetWorld();
+  });
+  const consoleInput=document.getElementById('consoleInput');
+  document.getElementById('consoleRun').addEventListener('click',()=>{
+    runConsoleCommand(consoleInput.value); consoleInput.value='';
+  });
+  consoleInput.addEventListener('keydown',(e)=>{
+    if(e.key==='Enter'){ runConsoleCommand(consoleInput.value); consoleInput.value=''; }
+  });
   document.getElementById('chronHead').addEventListener('click',()=>{
     const f=document.getElementById('chronicle');
     f.classList.toggle('collapsed');
@@ -2407,6 +2503,11 @@ function initUI(){
     if(applyBtn && G.pendingPower){
       const n=G.npcs[applyBtn.dataset.applynpc];
       const p=G.pendingPower.def;
+      if(n && p.id==='grantPower'){
+        clearPending();
+        openGrantPowerModal(n.id);
+        return;
+      }
       if(n&&G.favor>=p.cost){
         G.favor-=p.cost;
         const ok=applyNpcPower(p,n);
@@ -2414,6 +2515,24 @@ function initUI(){
         clearPending();
         openNpcModal(n);
         renderDirty();
+      }
+      return;
+    }
+    const grantPowerBtn=e.target.closest('[data-grantpower]');
+    if(grantPowerBtn){ openGrantPowerModal(grantPowerBtn.dataset.grantpower); return; }
+    const grantBtn=e.target.closest('[data-grant]');
+    if(grantBtn){
+      const n=G.npcs[grantBtn.dataset.npc];
+      const cost=POWER_BY_ID.grantPower.cost;
+      if(n && G.favor>=cost && !n.grantedPowers.includes(grantBtn.dataset.grant)){
+        G.favor-=cost;
+        n.grantedPowers.push(grantBtn.dataset.grant);
+        log(`${n.name} is granted the power of ${POWER_BY_ID[grantBtn.dataset.grant].name}.`,'milestone');
+        recordDivine(townOf(n.townId),'blessing');
+        openNpcModal(n);
+        renderDirty();
+      } else if(!n||G.favor<cost){
+        toast('Not enough favor.');
       }
       return;
     }
@@ -2471,7 +2590,9 @@ function fastForwardToEra(targetEra){
   renderAll();
 }
 const SAVE_KEY='demiurge_save_v2';
+let isResetting=false;
 function saveGame(){
+  if(isResetting) return;
   try{
     const copy=Object.assign({},G);
     delete copy.dirty; delete copy._mutationModalOpen;
@@ -2516,10 +2637,110 @@ function gameLoop(ts){
   requestAnimationFrame(gameLoop);
 }
 
+/* ============================== DIVINE CONSOLE ==============================
+   Direct, unrestricted access to the live game state. This is a single-player,
+   fully offline sandbox -- no server, no other player, nothing to protect
+   against -- so the console lets you do literally anything to your own world,
+   the same way any other god power does. */
+function findNpcByName(name){
+  const q=String(name).toLowerCase();
+  return Object.values(G.npcs).find(n=>n.alive&&n.name.toLowerCase()===q);
+}
+function freeze(name){
+  const n=findNpcByName(name);
+  if(!n) return `No living person named "${name}" found.`;
+  n.frozen=!n.frozen;
+  markDirty('towns');
+  return n.frozen?`${n.name} is now frozen in time.`:`${n.name} thaws.`;
+}
+function freezeTime(){
+  doFreezeTime();
+  return G.paused?'Time is frozen.':'Time flows again.';
+}
+function kill(name,cause){
+  const n=findNpcByName(name);
+  if(!n) return `No living person named "${name}" found.`;
+  killNpc(n,townOf(n.townId),cause||"a god's hand");
+  markDirty('towns');
+  return `${n.name} has died.`;
+}
+function bless(name){ const n=findNpcByName(name); if(!n) return 'Not found.'; applyNpcPower(POWER_BY_ID.bless,n); return `${n.name} blessed.`; }
+function curse(name){ const n=findNpcByName(name); if(!n) return 'Not found.'; applyNpcPower(POWER_BY_ID.curse,n); return `${n.name} cursed.`; }
+function spawnHuman(name,townIndex){
+  const town=G.towns[townIndex||0];
+  if(!town) return 'No settlement exists yet.';
+  const n=makeNpc({age:20,townId:town.id,techStageIdx:town.techStageIdx,name:name||undefined,custom:true});
+  addNpcToTown(town,n);
+  town.population++;
+  markDirty('towns');
+  return `${n.name} now walks among the people of ${town.name}.`;
+}
+function listTowns(){
+  if(!G.towns.length) return 'No settlements yet.';
+  return G.towns.map((t,i)=>`[${i}] ${t.name} — pop ${t.population}, ${TECH_STAGES[t.techStageIdx]}`).join('\n');
+}
+function listPeople(townIndex){
+  const town=G.towns[townIndex||0];
+  if(!town) return 'No settlement at that index.';
+  return town.npcIds.map(id=>G.npcs[id]).filter(n=>n&&n.alive).map(n=>`${n.name} (${n.status}, ${n.job})`).join('\n')||'No tracked citizens.';
+}
+function setEra(name){
+  const i=ERAS.findIndex(e=>e.toLowerCase()===String(name).toLowerCase());
+  if(i===-1) return 'Unknown era. Try one of: '+ERAS.join(', ');
+  fastForwardToEra(i);
+  return `Leapt to ${ERAS[i]}.`;
+}
+function help(){
+  return [
+    'Direct access: G is the entire live game state -- read or write anything.',
+    '  G.favor = 999',
+    '  G.towns[0].gold = 5000',
+    '  G.towns[0].unrest = 0',
+    '',
+    'Shortcuts:',
+    '  freeze("Name")          toggle a person frozen in time',
+    '  freezeTime()            pause/resume the whole world',
+    '  bless("Name") / curse("Name")',
+    '  kill("Name")',
+    '  spawnHuman("Name", townIndex)',
+    '  listTowns()  /  listPeople(townIndex)',
+    '  setEra("Modern Age")    jump straight to an era',
+    '',
+    'Anything else you type runs as plain JavaScript against the live game.'
+  ].join('\n');
+}
+function appendConsoleLine(text,cls){
+  const el=document.getElementById('consoleOutput');
+  if(!el) return;
+  const div=document.createElement('div');
+  div.className='cLine '+(cls||'cInfo');
+  div.textContent=text;
+  el.appendChild(div);
+  while(el.children.length>300) el.removeChild(el.firstChild);
+  el.scrollTop=el.scrollHeight;
+}
+function formatConsoleResult(v){
+  if(typeof v==='string') return v;
+  if(v===null||v===undefined) return String(v);
+  try{ return JSON.stringify(v,(k,val)=>typeof val==='function'?'[fn]':val,1).slice(0,3000); }
+  catch(e){ return String(v); }
+}
+function runConsoleCommand(raw){
+  const code=raw.trim();
+  if(!code) return;
+  appendConsoleLine('> '+code,'cCmd');
+  try{
+    const result=eval(code);
+    if(result!==undefined) appendConsoleLine(formatConsoleResult(result),'cResult');
+    renderDirty(); renderCanvas();
+  }catch(err){
+    appendConsoleLine('Error: '+err.message,'cError');
+  }
+}
+
 /* ============================== BOOT ============================== */
 function boot(){
   const saved=loadGame();
-  const isFreshGame=!saved;
   if(saved){
     G=saved;
     G.dirty={powers:true,prayers:true,specimen:true,towns:true,header:true};
@@ -2543,6 +2764,8 @@ function boot(){
         n.curiosityBaseline=clamp(rand(25,55)+(n.traits&&n.traits.includes('Curious')?18:0),3,97);
         n.curiosity=n.curiosityBaseline;
       }
+      if(n.frozen===undefined) n.frozen=false;
+      if(n.grantedPowers===undefined) n.grantedPowers=[];
     });
     if(G.offlineProgress){
       const lastReal=Number(localStorage.getItem(SAVE_KEY+'_time'))||Date.now();
@@ -2562,7 +2785,13 @@ function boot(){
   requestAnimationFrame(gameLoop);
   setInterval(saveGame,15000);
   window.addEventListener('beforeunload',saveGame);
-  if(isFreshGame) showWelcomeModal();
+  if(G.genesisStep===0 && G.towns.length===0) showWelcomeModal();
+}
+function resetWorld(){
+  isResetting=true;
+  localStorage.removeItem(SAVE_KEY);
+  localStorage.removeItem(SAVE_KEY+'_time');
+  location.reload();
 }
 function showWelcomeModal(){
   openModal(`
