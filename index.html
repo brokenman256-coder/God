@@ -282,7 +282,7 @@ const TOWN_NAMES=["Ashvale","Brenhollow","Corwick","Duskmere","Emberfall","Fenmo
 "Highreach","Ironglen","Junipeer","Kestrelport","Larkspur","Millhaven","Northgale","Oakenshire",
 "Pellwater","Quietbrook","Redcliff","Stonewick","Thornbury","Umberfall","Valewick","Westermere"];
 const DISEASE_NAMES=["Grey Fever","Wasting Rot","Bloodcough","Marsh Plague","Weeping Pox","Bonefire Sickness","Crimson Ague","Hollow Lung"];
-const TRAIT_POOL=["Strong","Pious","Cunning","Sickly","Charismatic","Stubborn","Kind","Greedy","Brave","Timid","Curious","Patient"];
+const TRAIT_POOL=["Strong","Pious","Cunning","Sickly","Charismatic","Stubborn","Kind","Greedy","Brave","Timid","Curious","Patient","Ambitious"];
 
 /* ============================== DATA TABLES ============================== */
 const TILE={VOID:0,WATER:1,LAND:2,FOREST:3,MOUNTAIN:4,DESERT:5,ICE:6,ASH:7,LAVA:8};
@@ -304,6 +304,37 @@ const TECH_TO_ERA=[ERA.RISE,ERA.RISE,ERA.CLASSICAL,ERA.CLASSICAL,ERA.MEDIEVAL,ER
   ERA.INDUSTRIAL,ERA.MODERN,ERA.ATOMIC,ERA.INFO,ERA.FUTURE];
 const TECH_ICON=["🏕️","🛖","⛺","🏛️","🏰","🏯","🏭","🏙️","☢️","🌐","🚀"];
 const ATOMIC_IDX=8;
+
+/* Real-world-inspired demographic curves, indexed by TECH_STAGES idx.
+   Life expectancy and birth rates track the historical demographic
+   transition: high birth/high death in pre-industrial eras, falling
+   death then falling birth rates as tech (and secularism) rise. */
+const LIFE_EXPECTANCY=[32,36,40,44,48,52,58,68,74,79,85];
+const INFANT_MORTALITY=[0.00055,0.00048,0.00040,0.00033,0.00027,0.00020,0.00012,0.00006,0.00003,0.000018,0.00001];
+const BIRTH_RATE_MULT=[1.35,1.28,1.2,1.15,1.1,1.0,0.85,0.65,0.55,0.45,0.4];
+/* Desired family size shrinks with modernization (education, women's workforce
+   participation, child-rearing cost) -- the actual behavioral driver behind the
+   real-world demographic transition, not just biology. */
+const MAX_FAMILY_SIZE=[8,8,7,7,6,5,4,3,2,2,2];
+const ATHEIST_CHANCE=[0.03,0.04,0.05,0.06,0.07,0.1,0.15,0.27,0.33,0.42,0.5];
+
+const GOVERNMENT_TYPES={
+  chiefdom:{name:'Chiefdom',taxRate:0.05,corruption:0.3,unrestDecay:0.15,warPropensity:1.1},
+  monarchy:{name:'Monarchy',taxRate:0.12,corruption:0.4,unrestDecay:0.1,warPropensity:1.2},
+  theocracy:{name:'Theocracy',taxRate:0.1,corruption:0.25,unrestDecay:0.12,warPropensity:0.9},
+  republic:{name:'Republic',taxRate:0.15,corruption:0.2,unrestDecay:0.2,warPropensity:0.8},
+  democracy:{name:'Democracy',taxRate:0.18,corruption:0.12,unrestDecay:0.25,warPropensity:0.6},
+  autocracy:{name:'Autocracy',taxRate:0.2,corruption:0.5,unrestDecay:0.08,warPropensity:1.3},
+  technocracy:{name:'Technocracy',taxRate:0.16,corruption:0.1,unrestDecay:0.22,warPropensity:0.5}
+};
+function eligibleGovernments(town){
+  const t=town.techStageIdx;
+  if(t<=1) return ['chiefdom'];
+  if(t<=3) return town.worship>60?['monarchy','theocracy']:['monarchy'];
+  if(t<=5) return ['monarchy','republic'];
+  if(t<=7) return ['republic','democracy','autocracy'];
+  return ['democracy','autocracy','technocracy'];
+}
 
 const GENESIS_STEPS=[
   {id:'light',label:'Let There Be Light',icon:'☀️',text:'A light kindles in the endless dark, and the void takes notice.'},
@@ -465,26 +496,49 @@ function createTown(x,y,name){
     unrest:5, crimeRate:5, policeStrength:10,
     worship:10, creed:null, divineHistory:{},
     diseases:[], atWarWith:[], tension:{},
-    npcIds:[], notableIds:[], messiahId:null, alive:true, guardBoostUntil:0
+    npcIds:[], notableIds:[], messiahId:null, alive:true, guardBoostUntil:0,
+    government:{type:'chiefdom',leaderId:null,stability:60,since:G.tickCount},
+    secularism:0.03
   };
   return t;
 }
 function makeNpc(opts){
   const sex=Math.random()<0.5?'m':'f';
+  const techIdx=opts.techStageIdx??0;
+  const believer=Math.random()>=(ATHEIST_CHANCE[techIdx]??0.3);
   const traits=[];
   const n1=choice(TRAIT_POOL); traits.push(n1);
   if(Math.random()<0.35){ let n2=choice(TRAIT_POOL); if(n2!==n1) traits.push(n2); }
+  if(!believer){
+    const pi=traits.indexOf('Pious');
+    if(pi!==-1) traits[pi]=choice(TRAIT_POOL.filter(t=>t!=='Pious'));
+  }
   const n={
     id:uid('n'), name:choice(FIRST_NAMES), sex, age:opts.age??0, alive:true,
-    townId:opts.townId, status:'infant',
-    hunger:20, mood:60, faith:30, health:90,
+    townId:opts.townId, status:'infant', believer,
+    hunger:20, mood:60, faith:believer?30:8, health:90,
     traits, talent:irand(10,40), crimeInclination:irand(5,20), karma:0,
     role:'commoner', notable:false, title:null, giftedAtBirth:false,
     relationship:{status:'single'}, parents:opts.parents||[], children:[],
-    blessCount:0, curseCount:0, disease:false, birthTick:G.tickCount
+    blessCount:0, curseCount:0, disease:false, birthTick:G.tickCount, lastBirthTick:0
   };
   updateLifeStage(n);
   return n;
+}
+function fertility(n){
+  if(n.sex!=='f'||!n.alive) return 0;
+  if(n.age<15||n.age>45) return 0;
+  if(n.age<20) return (n.age-15)/5*0.8;
+  if(n.age<=32) return 1;
+  return Math.max(0,1-(n.age-32)/13);
+}
+function personalFaithBaseline(n){
+  let b=32;
+  if(n.traits.includes('Pious')) b+=20;
+  if(n.traits.includes('Cunning')) b-=8;
+  if(n.traits.includes('Curious')) b-=5;
+  if(n.traits.includes('Stubborn')) b+=6;
+  return clamp(b,5,90);
 }
 function addNpcToTown(town,npc){
   npc.townId=town.id;
@@ -546,7 +600,7 @@ function spawnFirstHumans(){
   const site=findGoodTownSite();
   const town=createTown(site.x,site.y,randomTownName());
   town.population=8;
-  for(let i=0;i<8;i++) addNpcToTown(town,makeNpc({age:16+Math.random()*22,townId:town.id}));
+  for(let i=0;i<8;i++) addNpcToTown(town,makeNpc({age:16+Math.random()*22,townId:town.id,techStageIdx:town.techStageIdx}));
   G.towns.push(town);
   log(`At ${town.name}, the first humans awaken and gaze upon the world you made.`,'milestone');
   markDirty('towns');
@@ -635,19 +689,34 @@ function stepTown(town){
     stepNpc(n,town,hungry);
   }
 
-  let growth=0.0011;
-  growth+= town.food>town.foodCap*0.5?0.004:(hungry?-0.01:0);
-  growth-= town.unrest/100*0.003;
-  growth-= (activeDisease(town)?0.012:0);
-  growth-= (town.atWarWith.length?0.006:0);
-  town.population=Math.max(0,Math.round(town.population*(1+growth)));
+  /* Population dynamics: named/tracked citizens already changed town.population
+     by +/-1 as they were individually born (maybeHaveChild) or died (killNpc).
+     The much larger untracked crowd is modeled with the same real-world
+     demographic levers -- a crude death rate derived from tech-era life
+     expectancy (Gompertz-consistent) and a crude birth rate that falls with
+     tech/secularization exactly like history's demographic transition. */
+  const trackedAlive=town.npcIds.length;
+  const untracked=Math.max(0,town.population-trackedAlive);
+  const le=LIFE_EXPECTANCY[town.techStageIdx];
+  const foodStressFactor=hungry?1.8:(town.food>town.foodCap*0.5?0.85:1);
+  const diseaseFactor=activeDisease(town)?1.6:1;
+  const warDeathFactor=town.atWarWith.length?1.3:1;
+  const dailyDeathRate=(1/le/365)*foodStressFactor*diseaseFactor*warDeathFactor;
+  const untrackedDeaths=untracked*dailyDeathRate;
+
+  const dailyBirthRate=(0.028*BIRTH_RATE_MULT[town.techStageIdx])/365;
+  const foodBirthFactor=town.food>town.foodCap*0.3?1:0.5;
+  const untrackedBirths=untracked*dailyBirthRate*foodBirthFactor*(1-town.unrest/300);
+
+  town.population=Math.max(0,Math.round(trackedAlive+untracked+(untrackedBirths-untrackedDeaths)));
   if(town.population<=0){ town.alive=false; log(`${town.name} has fallen silent, its people gone.`,'death'); }
 
-  const inequality=0.25+Math.random()*0.25;
+  const gov=GOVERNMENT_TYPES[town.government.type];
+  const inequality=0.2+Math.random()*0.2+gov.corruption*0.2;
   const crimeTarget=clamp(town.unrest*0.4+(hungry?28:0)+inequality*22-town.policeStrength*0.35,0,100);
   town.crimeRate=lerp(town.crimeRate,crimeTarget,0.06);
-  town.unrest=clamp(town.unrest+(town.crimeRate>60?0.3:-0.2)+(activeDisease(town)?0.15:0)+(town.atWarWith.length?0.25:0)-0.1,0,100);
-  const policeBase=4+town.techStageIdx*0.6;
+  town.unrest=clamp(town.unrest+(town.crimeRate>60?0.3:-0.2)+(activeDisease(town)?0.15:0)+(town.atWarWith.length?0.25:0)-gov.unrestDecay*0.4,0,100);
+  const policeBase=4+town.techStageIdx*0.6-gov.corruption*3;
   const guardBoost = G.tickCount<town.guardBoostUntil?18:0;
   town.policeStrength=clamp(lerp(town.policeStrength,policeBase+guardBoost,0.08),0,100);
 
@@ -664,6 +733,54 @@ function stepTown(town){
   stepDisease(town);
   stepDiplomacy(town);
   stepWorship(town);
+  stepGovernment(town);
+}
+
+function stepGovernment(town){
+  const gov=GOVERNMENT_TYPES[town.government.type];
+  town.gold=clamp(town.gold+town.population*gov.taxRate*0.08-town.population*0.01,0,999999);
+  town.government.stability=clamp(town.government.stability+(town.unrest>70?-0.6:0.3)+(town.atWarWith.length?-0.3:0),0,100);
+
+  if(town.government.leaderId && !(G.npcs[town.government.leaderId]&&G.npcs[town.government.leaderId].alive)){
+    town.government.leaderId=null;
+  }
+  if(!town.government.leaderId){
+    const candidate=town.notableIds.map(id=>G.npcs[id]).find(n=>n&&n.alive&&n.role==='leader');
+    if(candidate) town.government.leaderId=candidate.id;
+  }
+
+  if(town.government.stability<20 && Math.random()<0.01){
+    attemptRevolution(town);
+  } else if(town.government.stability>70 && town.techStageIdx>=1 && Math.random()<0.0015){
+    const opts=eligibleGovernments(town).filter(g=>g!==town.government.type);
+    if(opts.length){
+      const newType=choice(opts);
+      const oldName=GOVERNMENT_TYPES[town.government.type].name;
+      town.government.type=newType; town.government.since=G.tickCount; town.government.stability=60;
+      log(`${town.name} peacefully transitions from ${art(oldName)} to ${art(GOVERNMENT_TYPES[newType].name)}.`,'milestone');
+      markDirty('towns');
+    }
+  }
+}
+function attemptRevolution(town){
+  const rebels=town.npcIds.map(id=>G.npcs[id]).filter(n=>n&&n.alive&&n.status==='adult'&&n.traits.includes('Ambitious'));
+  const leaderName=town.government.leaderId&&G.npcs[town.government.leaderId]?G.npcs[town.government.leaderId].name:'the ruling order';
+  if(!rebels.length){ town.unrest=clamp(town.unrest-10,0,100); return; }
+  const newLeader=choice(rebels);
+  const oldGovName=GOVERNMENT_TYPES[town.government.type].name;
+  const opts=eligibleGovernments(town);
+  const newType=choice(opts);
+  town.government.type=newType;
+  town.government.leaderId=newLeader.id;
+  town.government.stability=45;
+  town.government.since=G.tickCount;
+  town.unrest=clamp(town.unrest-30,0,100);
+  if(town.messiahId && town.messiahId!==newLeader.id){ /* messiah keeps their own title, leadership is separate */ }
+  if(!newLeader.notable){ newLeader.notable=true; town.notableIds.push(newLeader.id); }
+  newLeader.role='leader'; newLeader.title='Leader';
+  newLeader.karma+=3;
+  log(`Revolution! ${newLeader.name} overthrows ${leaderName} in ${town.name} — the ${oldGovName} falls to ${art(GOVERNMENT_TYPES[newType].name)}.`,'milestone');
+  markDirty('towns');
 }
 
 function weatherFoodMult(town){
@@ -693,7 +810,15 @@ function stepNpc(n,town,hungry){
   updateLifeStage(n);
   n.hunger=clamp(n.hunger+(hungry?2.4:-1.6)+rand(-0.4,0.4),0,100);
   n.mood=clamp(n.mood+moodDelta(n,town),0,100);
-  n.faith=clamp(n.faith+(town.worship-n.faith)*0.012+rand(-0.3,0.3),0,100);
+  if(n.believer){
+    const baseline=personalFaithBaseline(n);
+    const worldPull=(town.worship-baseline)*0.15;
+    n.faith=clamp(n.faith+(baseline+worldPull-n.faith)*0.01+rand(-0.4,0.4),0,100);
+    if(n.faith<8 && Math.random()<0.0004){ n.believer=false; log(`${n.name} loses their faith and turns to reason.`,'general',{silent:true}); }
+  } else {
+    n.faith=clamp(n.faith+(8-n.faith)*0.01+rand(-0.2,0.2),0,100);
+    if(n.faith>70 && Math.random()<0.0015){ n.believer=true; log(`${n.name} finds faith in ${townOf(n.townId)?.creed?.name||'the divine'}.`,'general',{silent:true}); }
+  }
   n.health=clamp(n.health+(n.hunger>85?-0.6:0.15)+(n.disease?-0.5:0)+rand(-0.2,0.2),0,100);
 
   if(n.status==='adult'){
@@ -705,7 +830,8 @@ function stepNpc(n,town,hungry){
 }
 
 function updateCrime(n,town){
-  n.crimeInclination=clamp(n.crimeInclination+(n.hunger>70?0.3:-0.2)+(n.faith<30?0.1:-0.06)+(town.unrest>50?0.2:-0.1),0,100);
+  const frustratedAmbition=(n.traits.includes('Ambitious')&&!n.notable)?0.05:0;
+  n.crimeInclination=clamp(n.crimeInclination+(n.hunger>70?0.3:-0.2)+(n.faith<30?0.1:-0.06)+(town.unrest>50?0.2:-0.1)+frustratedAmbition,0,100);
   if(Math.random()<n.crimeInclination/100*0.012) commitCrime(n,town);
 }
 function commitCrime(n,town){
@@ -745,8 +871,14 @@ function updateRelationship(n,town){
     else if(Math.random()<0.025){ n.relationship={status:'single'}; p.relationship={status:'single'}; }
   } else if(r.status==='married'){
     const p=G.npcs[r.partnerId];
-    if(p && p.alive && town.food>0 && n.age<45 && n.sex!==undefined && Math.random()<0.007-town.unrest/6000){
-      maybeHaveChild(n,p,town);
+    if(p && p.alive && n.id<p.id && town.food>town.foodCap*0.05){
+      const fert=Math.max(fertility(n),fertility(p));
+      const spacingOk=(G.tickCount-(n.lastBirthTick||0))>650 && (G.tickCount-(p.lastBirthTick||0))>650;
+      const familyCap=MAX_FAMILY_SIZE[town.techStageIdx];
+      if(fert>0 && spacingOk && n.children.length<familyCap){
+        const chance=0.006*fert*BIRTH_RATE_MULT[town.techStageIdx]*(town.food>town.foodCap*0.3?1:0.4)-town.unrest/8000;
+        if(Math.random()<Math.max(0,chance)) maybeHaveChild(n,p,town);
+      }
     }
   }
 }
@@ -759,10 +891,11 @@ function marry(n,p,town){
   markDirty('towns');
 }
 function maybeHaveChild(n,p,town){
-  if(Math.random()<0.5) return;
-  const child=makeNpc({age:0,townId:town.id,parents:[n.id,p.id]});
+  const child=makeNpc({age:0,townId:town.id,parents:[n.id,p.id],techStageIdx:town.techStageIdx});
   addNpcToTown(town,child);
   n.children.push(child.id); p.children.push(child.id);
+  n.lastBirthTick=G.tickCount; p.lastBirthTick=G.tickCount;
+  town.population++;
   G.stats.totalBirths++;
   log(`A child is born to ${n.name} and ${p.name} in ${town.name}.`,'family');
   markDirty('towns');
@@ -771,14 +904,16 @@ function maybeHaveChild(n,p,town){
 function maybeBecomeNotable(n,town){
   if(n.notable||n.age<16) return;
   const giftMult=n.giftedAtBirth?3.2:1;
-  const chance=(n.talent/100)*0.0007*giftMult;
+  const ambitionMult=n.traits.includes('Ambitious')?1.8:1;
+  const chance=(n.talent/100)*0.0007*giftMult*ambitionMult;
   if(Math.random()<chance){
     const roles=['leader','inventor','healer','priest'];
     const avail=roles.filter(r=>!town.notableIds.some(id=>{const t=G.npcs[id];return t&&t.alive&&t.role===r;}));
     if(!avail.length) return;
-    const role=choice(avail);
+    const role=n.traits.includes('Ambitious')&&avail.includes('leader')&&Math.random()<0.5?'leader':choice(avail);
     n.notable=true; n.role=role; n.title=titleFor(role);
     town.notableIds.push(n.id);
+    if(role==='leader' && !town.government.leaderId) town.government.leaderId=n.id;
     log(`${n.name} of ${town.name} has risen as ${art(n.title)}!`,'notable');
     markDirty('towns');
   }
@@ -788,26 +923,39 @@ function titleFor(role){
 }
 
 function maybeDie(n,town){
-  let p=0.00003;
-  if(n.age>60) p+=(n.age-60)*0.00006;
-  if(n.hunger>90) p+=0.002;
+  let p=0;
+  if(n.age<5){
+    p+=INFANT_MORTALITY[town.techStageIdx]??0.0003;
+  } else {
+    const le=LIFE_EXPECTANCY[town.techStageIdx];
+    p+=0.000012*Math.exp(0.09*(n.age-le*0.55));
+  }
+  if(n.hunger>90) p+=0.0022;
+  else if(n.hunger>75) p+=0.0006;
   if(n.health<20) p+=0.003;
+  else if(n.health<40) p+=0.0008;
   if(n.disease) p+=0.004;
   if(town.atWarWith.length && Math.random()<0.15) p+=0.0018;
+  if(n.traits.includes('Sickly')) p*=1.3;
+  if(n.traits.includes('Strong')) p*=0.85;
+  p=clamp(p,0,0.95);
   if(Math.random()<p){
     let cause='old age';
-    if(n.hunger>90) cause='starvation';
+    if(n.age<5) cause='infancy';
+    else if(n.hunger>90) cause='starvation';
     else if(n.disease) cause='sickness';
-    else if(town.atWarWith.length) cause='war';
+    else if(town.atWarWith.length && Math.random()<0.3) cause='war';
     killNpc(n,town,cause);
   }
 }
 function killNpc(n,town,cause){
   n.alive=false; n.deathTick=G.tickCount; n.deathCause=cause;
   town.npcIds=town.npcIds.filter(id=>id!==n.id);
+  town.population=Math.max(0,town.population-1);
   if(n.notable){
     town.notableIds=town.notableIds.filter(id=>id!==n.id);
     if(town.messiahId===n.id) town.messiahId=null;
+    if(town.government.leaderId===n.id) town.government.leaderId=null;
     log(`${n.name}, ${art(n.title||'notable figure')} of ${town.name}, has died of ${cause}.`,'death');
   }
   const r=n.relationship;
@@ -852,7 +1000,8 @@ function stepDiplomacy(town){
     const key=other.id;
     let t=town.tension[key]||0;
     const techGap=Math.abs(town.techStageIdx-other.techStageIdx);
-    t+= (0.02*(30-dist)/30) + techGap*0.01 + Math.random()*0.03 - 0.015;
+    const warPropensity=GOVERNMENT_TYPES[town.government.type].warPropensity;
+    t+= ((0.02*(30-dist)/30) + techGap*0.01 + Math.random()*0.03 - 0.015)*warPropensity;
     t=clamp(t,0,100);
     town.tension[key]=t;
     const atWar=town.atWarWith.includes(other.id);
@@ -878,9 +1027,12 @@ function endWar(a,b,reason){
 
 function stepWorship(town){
   const npcs=town.npcIds.map(id=>G.npcs[id]).filter(n=>n&&n.alive);
-  const avgFaith=npcs.length?npcs.reduce((s,n)=>s+n.faith,0)/npcs.length:town.worship;
+  const believers=npcs.filter(n=>n.believer);
+  town.secularism=npcs.length?1-(believers.length/npcs.length):town.secularism;
+  const avgFaith=believers.length?believers.reduce((s,n)=>s+n.faith,0)/believers.length:0;
   const messiahBonus=town.messiahId?12:0;
-  town.worship=clamp(lerp(town.worship,avgFaith+messiahBonus,0.03),0,100);
+  const target=avgFaith*(1-town.secularism*0.35)+messiahBonus;
+  town.worship=clamp(lerp(town.worship,target,0.03),0,100);
   if(town.worship>=50 && !town.creed){
     town.creed=generateCreed(town);
     log(`The people of ${town.name} have founded ${town.creed.name}.`,'milestone');
@@ -920,7 +1072,7 @@ function stepDemons(){
 
 function maybeGeneratePrayer(){
   if(G.prayers.length>=8) return;
-  const towns=livingTowns().filter(t=>t.npcIds.length>0);
+  const towns=livingTowns().filter(t=>t.npcIds.length>0 && Math.random()>t.secularism*0.7);
   if(!towns.length) return;
   if(Math.random()>0.06) return;
   const town=choice(towns);
@@ -989,8 +1141,18 @@ function maybeFoundColony(){
       nt.techStageIdx=Math.max(0,town.techStageIdx-1);
       town.population=Math.round(town.population*0.7);
       G.towns.push(nt);
-      for(let i=0;i<6;i++) addNpcToTown(nt,makeNpc({age:16+Math.random()*20,townId:nt.id}));
-      log(`Settlers from ${town.name} found the town of ${nt.name}.`,'milestone');
+      for(let i=0;i<6;i++) addNpcToTown(nt,makeNpc({age:16+Math.random()*20,townId:nt.id,techStageIdx:nt.techStageIdx}));
+      const founder=town.npcIds.map(id=>G.npcs[id]).find(n=>n&&n.alive&&n.status==='adult'&&n.traits.includes('Ambitious')&&!n.notable);
+      if(founder){
+        town.npcIds=town.npcIds.filter(id=>id!==founder.id);
+        founder.townId=nt.id; nt.npcIds.push(founder.id);
+        founder.notable=true; founder.role='leader'; founder.title='Leader';
+        nt.notableIds.push(founder.id);
+        nt.government.leaderId=founder.id;
+        log(`${founder.name}, ever ambitious, leads settlers from ${town.name} to found ${nt.name}.`,'milestone');
+      } else {
+        log(`Settlers from ${town.name} found the town of ${nt.name}.`,'milestone');
+      }
       markDirty('towns');
       return;
     }
@@ -1167,7 +1329,8 @@ function applyNpcPower(power,n){
   const town=townOf(n.townId);
   if(power.id==='bless'){
     n.blessCount++; n.mood=clamp(n.mood+25,0,100); n.health=clamp(n.health+15,0,100);
-    n.faith=clamp(n.faith+15,0,100); n.karma+=6;
+    n.faith=clamp(n.faith+(n.believer?15:5),0,100); n.karma+=6;
+    if(!n.believer && n.faith>60 && Math.random()<0.15){ n.believer=true; log(`${n.name}, once a skeptic, is moved to belief.`,'general',{silent:true}); }
     log(`${n.name} has been blessed.`,'general',{silent:true}); toast(`${n.name} blessed.`);
   } else if(power.id==='curse'){
     n.curseCount++; n.mood=clamp(n.mood-25,0,100); n.health=clamp(n.health-15,0,100);
@@ -1480,7 +1643,9 @@ function renderTowns(){
   const el=document.getElementById('panel-towns');
   const towns=livingTowns();
   if(!towns.length){ el.innerHTML='<div class="emptyState">No peoples walk the world yet.</div>'; return; }
-  el.innerHTML=`<div class="panelHead">Peoples of the World</div>`+towns.map(t=>`
+  el.innerHTML=`<div class="panelHead">Peoples of the World</div>`+towns.map(t=>{
+    const leader=t.government.leaderId?G.npcs[t.government.leaderId]:null;
+    return `
     <div class="townCard" data-town="${t.id}">
       <div class="tTop"><span class="tName">${esc(t.name)}</span><span class="tTech">${TECH_ICON[t.techStageIdx]} ${TECH_STAGES[t.techStageIdx]}</span></div>
       <div class="tStats">
@@ -1490,8 +1655,13 @@ function renderTowns(){
         ${t.atWarWith.length?'<span class="flag war">AT WAR</span>':''}
         ${activeDisease(t)?'<span class="flag disease">DISEASE</span>':''}
       </div>
+      <div class="tStats">
+        <span>⚖ ${esc(GOVERNMENT_TYPES[t.government.type].name)}${leader?' — '+esc(leader.name):''}</span>
+        <span>Atheist <b>${Math.round(t.secularism*100)}%</b></span>
+      </div>
       ${t.creed?`<div class="tStats"><span>☩ ${esc(t.creed.name)}</span></div>`:''}
-    </div>`).join('');
+    </div>`;
+  }).join('');
 }
 
 /* ============================== MODALS ============================== */
@@ -1512,10 +1682,12 @@ function openTownModal(town){
     <div class="statRow"><span class="label">${esc(d.name)}</span>
       <div class="bar"><i style="width:${d.cureProgress}%;background:var(--warn)"></i></div></div>`).join('');
   const warHtml=town.atWarWith.map(id=>townName(id)).join(', ');
+  const gov=GOVERNMENT_TYPES[town.government.type];
+  const leader=town.government.leaderId?G.npcs[town.government.leaderId]:null;
   openModal(`
     <button class="modalClose" data-close="1">×</button>
     <h2>${esc(town.name)}</h2>
-    <div class="mSub">${TECH_STAGES[town.techStageIdx]} • Founded Day ${town.foundedTick}</div>
+    <div class="mSub">${TECH_STAGES[town.techStageIdx]} • Founded Day ${town.foundedTick} • ${esc(gov.name)}${leader?', led by '+esc(leader.name):''}</div>
     <div class="modalGrid">
       <div class="statRow"><span class="label">Population</span><b>${town.population}</b></div>
       <div class="statRow"><span class="label">Food</span><b>${Math.round(town.food)}</b></div>
@@ -1523,6 +1695,9 @@ function openTownModal(town){
       <div class="statRow"><span class="label">Unrest</span><b>${Math.round(town.unrest)}</b></div>
       <div class="statRow"><span class="label">Crime</span><b>${Math.round(town.crimeRate)}</b></div>
       <div class="statRow"><span class="label">Police</span><b>${Math.round(town.policeStrength)}</b></div>
+      <div class="statRow"><span class="label">Gold</span><b>${Math.round(town.gold)}</b></div>
+      <div class="statRow"><span class="label">Stability</span><b>${Math.round(town.government.stability)}</b></div>
+      <div class="statRow"><span class="label">Atheism</span><b>${Math.round(town.secularism*100)}%</b></div>
     </div>
     ${town.creed?`<div class="mSub">Creed: <b style="color:var(--gold)">${esc(town.creed.name)}</b></div>`:''}
     ${warHtml?`<div class="mSub">At war with: ${esc(warHtml)}</div>`:''}
@@ -1535,7 +1710,7 @@ function openTownModal(town){
     <div class="npcList">
       ${npcs.map(n=>`<div class="npcRow" data-npc="${n.id}">
         <span class="glyph">${npcGlyph(n)}</span><span class="nm">${esc(n.name)}${n.age<18?' ('+Math.floor(n.age)+')':''}</span>
-        <span class="role">${n.notable?esc(n.title):''}</span></div>`).join('') || '<div class="emptyState">No citizens tracked.</div>'}
+        <span class="role">${n.notable?esc(n.title):(n.believer?'':'atheist')}</span></div>`).join('') || '<div class="emptyState">No citizens tracked.</div>'}
     </div>
   `);
 }
@@ -1558,7 +1733,7 @@ function openNpcModal(npc){
   openModal(`
     <button class="modalClose" data-close="1">×</button>
     <h2>${npcGlyph(npc)} ${esc(npc.name)}</h2>
-    <div class="mSub">${esc(npc.status)}, age ${Math.floor(npc.age)} — ${esc(town?town.name:'')}${npc.notable?' — '+esc(npc.title):''}</div>
+    <div class="mSub">${esc(npc.status)}, age ${Math.floor(npc.age)} — ${esc(town?town.name:'')}${npc.notable?' — '+esc(npc.title):''} — ${npc.believer?'Believer':'Atheist'}</div>
     ${pendingApplies?`<div class="pendingBanner"><span>Apply ${esc(pending.def.name)} to ${esc(npc.name)}?</span><button data-applynpc="${npc.id}">Apply</button></div>`:''}
     <div class="statRow"><span class="label">Hunger</span><div class="bar"><i style="width:${npc.hunger}%;background:var(--warn)"></i></div></div>
     <div class="statRow"><span class="label">Mood</span><div class="bar"><i style="width:${npc.mood}%;background:var(--good)"></i></div></div>
