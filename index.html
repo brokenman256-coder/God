@@ -58,6 +58,14 @@ main#mainArea{flex:1;display:flex;min-height:0;}
 #townViewBar button{background:var(--panel2);color:var(--gold);border:1px solid var(--gold-dim);border-radius:6px;padding:4px 9px;font-size:11px;}
 #townViewBar #townViewName{font-weight:700;color:var(--gold);}
 #townViewBar #townViewClock{color:var(--text-dim);}
+#voidHint{position:absolute;top:50%;right:24px;transform:translateY(-50%);max-width:220px;
+  background:rgba(20,25,50,.94);border:1px solid var(--gold);color:var(--text);
+  padding:12px 16px;border-radius:10px;font-size:13px;line-height:1.5;display:none;
+  box-shadow:0 0 24px rgba(232,196,104,.25);animation:hintPulse 2.4s infinite ease-in-out;}
+#voidHint b{color:var(--gold);}
+@keyframes hintPulse{0%,100%{box-shadow:0 0 14px rgba(232,196,104,.2);}50%{box-shadow:0 0 30px rgba(232,196,104,.45);}}
+.genesisBtn:not(:disabled){animation:genesisReady 1.8s infinite ease-in-out;}
+@keyframes genesisReady{0%,100%{border-color:var(--gold-dim);}50%{border-color:var(--gold);}}
 #toast{position:absolute;bottom:14px;left:50%;transform:translateX(-50%);
   background:rgba(20,25,50,.95);border:1px solid var(--border);color:var(--text);
   padding:8px 16px;border-radius:8px;font-size:12px;opacity:0;pointer-events:none;transition:opacity .3s;z-index:15;}
@@ -250,6 +258,7 @@ footer#chronicle.collapsed{height:30px;}
       <div id="townViewBar"><button id="backToWorld">← Back to World</button><span id="townViewName"></span><span id="townViewClock"></span></div>
       <div id="tileTip"></div>
       <div id="toast"></div>
+      <div id="voidHint">✦ Begin here — open <b>Powers</b> and speak Creation into being →</div>
     </div>
     <aside id="sidebar">
       <div id="tabs">
@@ -1950,6 +1959,8 @@ function renderHeader(){
     const active=(sp==='pause'&&G.paused)||(!G.paused&&String(G.speedMult)===sp);
     b.classList.toggle('active',active);
   });
+  const hint=document.getElementById('voidHint');
+  if(hint) hint.style.display=(G.genesisStep<GENESIS_STEPS.length && G.viewMode==='world')?'block':'none';
 }
 function populateEraJump(){
   const sel=document.getElementById('eraJump');
@@ -2436,7 +2447,8 @@ function initUI(){
     if(!G.grid||!inBounds(G.grid,tx,ty)) return;
     if(G.pendingPower){ resolvePowerTarget(tx,ty); return; }
     const town=findTownAt(tx,ty);
-    if(town) openTownModal(town);
+    if(town){ openTownModal(town); return; }
+    if(G.genesisStep<GENESIS_STEPS.length){ toast('The world is still void. Begin with the Genesis powers →'); }
   });
   document.getElementById('backToWorld').addEventListener('click',exitTownView);
   window.addEventListener('resize',resizeCanvas);
@@ -2507,6 +2519,7 @@ function gameLoop(ts){
 /* ============================== BOOT ============================== */
 function boot(){
   const saved=loadGame();
+  const isFreshGame=!saved;
   if(saved){
     G=saved;
     G.dirty={powers:true,prayers:true,specimen:true,towns:true,header:true};
@@ -2549,6 +2562,26 @@ function boot(){
   requestAnimationFrame(gameLoop);
   setInterval(saveGame,15000);
   window.addEventListener('beforeunload',saveGame);
+  if(isFreshGame) showWelcomeModal();
+}
+function showWelcomeModal(){
+  openModal(`
+    <button class="modalClose" data-close="1">×</button>
+    <h2>You Are Demiurge</h2>
+    <div class="mSub">A god awakening before an empty void.</div>
+    <div class="statRow" style="display:block;line-height:1.6">
+      Everything you can do lives in the <b style="color:var(--gold)">Powers</b> panel on the right.
+      Start with <b style="color:var(--gold)">Genesis</b> at the top of that list — click through Light,
+      Matter, Waters, Land, Vegetation, and finally "It Is Good" to shape the world.
+    </div>
+    <div class="statRow" style="display:block;line-height:1.6;margin-top:10px">
+      Once life awakens and grows into humans, settlements will appear on the map. Click one to
+      inspect it, bless or curse its people, and answer their prayers as they come in.
+    </div>
+    <div class="actionRow">
+      <button data-close="1" style="background:var(--gold);color:#241a00;font-weight:700">Begin Creation</button>
+    </div>
+  `);
 }
 boot();
 </script>
