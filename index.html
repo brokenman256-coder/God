@@ -288,6 +288,7 @@ function uid(prefix){return prefix+(idSeq++).toString(36);}
 let idSeq=1;
 function art(word){return /^[aeiou]/i.test(word)?'an '+word:'a '+word;}
 function esc(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+function capitalize(s){s=String(s||'');return s?s[0].toUpperCase()+s.slice(1):s;}
 
 const FIRST_NAMES=["Aro","Bela","Cyra","Doran","Elin","Fenn","Gara","Halo","Ivo","Jora","Kael","Liora",
 "Moro","Nyx","Oren","Pyra","Quin","Ravi","Sera","Toma","Ula","Vex","Wren","Xara","Yorin","Zeva",
@@ -535,7 +536,7 @@ function initNewGame(){
     pendingPower:null, offlineProgress:true,
     stats:{totalBirths:0,totalDeaths:0,totalPrayersAnswered:0,totalPrayersDenied:0},
     dirty:{powers:true,prayers:true,specimen:true,towns:true,header:true},
-    viewMode:'world', viewingTownId:null
+    viewMode:'world', viewingTownId:null, caravans:[]
   };
 }
 
@@ -544,6 +545,7 @@ function createTown(x,y,name){
   const t={
     id:uid('t'), name, x, y, foundedTick:G.tickCount,
     population:8, food:50, foodCap:400, gold:20,
+    materials:0, materialsCap:200, goods:0, goodsCap:150, gini:0.3,
     techStageIdx:0, techProgress:0,
     unrest:5, crimeRate:5, policeStrength:10,
     worship:10, creed:null, divineHistory:{},
@@ -559,8 +561,10 @@ function createTown(x,y,name){
 const TOWN_VIEW_SIZE=640;
 const BUILDING_TYPES={
   tent:{icon:'⛺'}, house:{icon:'🏠'}, farm:{icon:'🌾'}, temple:{icon:'🛕'},
-  hall:{icon:'🏛️'}, hospital:{icon:'🏥'}
+  hall:{icon:'🏛️'}, hospital:{icon:'🏥'}, workshop:{icon:'🔨'}, mine:{icon:'⛏️'}, market:{icon:'🏪'}
 };
+const JOB_CAPACITY={farm:4,workshop:3,mine:3,market:2};
+function buildingTypeForJob(job){ return {farmer:'farm',miner:'mine',artisan:'workshop',merchant:'market'}[job]; }
 function hashStr(s){
   let h=0; for(let i=0;i<s.length;i++){ h=(h*31+s.charCodeAt(i))|0; }
   return (h>>>0)%1000/1000*Math.PI*2;
@@ -602,10 +606,70 @@ function syncTownBuildings(town){
   if(!town.buildings.some(b=>b.type==='hall')) placeBuilding(town,'hall');
   if((town.worship>=30||town.creed) && !town.buildings.some(b=>b.type==='temple')) placeBuilding(town,'temple');
   if(activeDisease(town) && !town.buildings.some(b=>b.type==='hospital')) placeBuilding(town,'hospital');
+  if(town.techStageIdx>=1){
+    const desiredWorkshops=Math.max(1,Math.ceil(town.population/20));
+    let workshops=town.buildings.filter(b=>b.type==='workshop');
+    while(workshops.length<desiredWorkshops && workshops.length<6){
+      placeBuilding(town,'workshop');
+      workshops=town.buildings.filter(b=>b.type==='workshop');
+    }
+    if(town.population>=15 && !town.buildings.some(b=>b.type==='market')) placeBuilding(town,'market');
+  }
+  if(town.techStageIdx>=2){
+    const desiredMines=Math.max(1,Math.ceil(town.population/25));
+    let mines=town.buildings.filter(b=>b.type==='mine');
+    while(mines.length<desiredMines && mines.length<5){
+      placeBuilding(town,'mine');
+      mines=town.buildings.filter(b=>b.type==='mine');
+    }
+  }
 }
 function ensureHome(npc,town){
   const houses=town.buildings.filter(b=>b.type==='house'||b.type==='tent');
   if(houses.length) npc.homeId=choice(houses).id;
+}
+
+/* ============================== ECONOMY: JOBS, PRODUCTION, WEALTH ============================== */
+function countByJob(town,job){
+  return town.npcIds.filter(id=>{const n=G.npcs[id]; return n&&n.alive&&n.job===job;}).length;
+}
+function jobSlotCount(town,buildingType){
+  return town.buildings.filter(b=>b.type===buildingType).length*(JOB_CAPACITY[buildingType]||0);
+}
+function pickWorkplace(town,type){
+  const opts=town.buildings.filter(b=>b.type===type);
+  return opts.length?choice(opts).id:null;
+}
+function assignJobs(town){
+  const adults=town.npcIds.map(id=>G.npcs[id]).filter(n=>n&&n.alive&&(n.status==='adult'||n.status==='elder'));
+  const order=[
+    ['farmer',jobSlotCount(town,'farm')],
+    ['miner',jobSlotCount(town,'mine')],
+    ['artisan',jobSlotCount(town,'workshop')],
+    ['merchant',jobSlotCount(town,'market')]
+  ];
+  for(const [job,slots] of order){
+    let current=adults.filter(n=>n.job===job).length;
+    if(current>=slots) continue;
+    const candidates=adults.filter(n=>!n.job||n.job==='unemployed'||n.job==='laborer');
+    for(const n of candidates){
+      if(current>=slots) break;
+      n.job=job;
+      n.workplaceId=pickWorkplace(town,buildingTypeForJob(job));
+      current++;
+    }
+  }
+  for(const n of adults){ if(!n.job) n.job='laborer'; }
+}
+function giniCoefficient(values){
+  const arr=values.filter(v=>v>=0).sort((a,b)=>a-b);
+  const n=arr.length;
+  if(n<2) return 0;
+  const sum=arr.reduce((s,v)=>s+v,0);
+  if(sum<=0) return 0;
+  let cum=0;
+  for(let i=0;i<n;i++) cum+=(i+1)*arr[i];
+  return (2*cum)/(n*sum)-(n+1)/n;
 }
 function makeNpc(opts){
   const sex=opts.sex||(Math.random()<0.5?'m':'f');
@@ -631,7 +695,8 @@ function makeNpc(opts){
     role:'commoner', notable:false, title:null, giftedAtBirth:false,
     relationship:{status:'single'}, parents:opts.parents||[], children:[],
     blessCount:0, curseCount:0, disease:false, birthTick:G.tickCount, lastBirthTick:0,
-    appearance:opts.appearance||randomAppearance(), custom:!!opts.custom
+    appearance:opts.appearance||randomAppearance(), custom:!!opts.custom,
+    job:'unemployed', workplaceId:null, wealth:irand(5,25)
   };
   updateLifeStage(n);
   return n;
@@ -756,6 +821,8 @@ function simulateTick(){
   expireOldPrayers();
   regenFavor();
   maybeFoundColony();
+  maybeSendCaravan();
+  stepCaravans();
   decayOverlays();
   checkEraAdvance();
   if(G.tickCount%15===0) markDirty('towns');
@@ -792,10 +859,32 @@ function decayOverlays(){
 
 function stepTown(town){
   syncTownBuildings(town);
-  const foodProd=(2.2+town.techStageIdx*0.35)*town.population*weatherFoodMult(town);
+  assignJobs(town);
+
+  const matCap=town.materialsCap+town.techStageIdx*60;
+  const goodsCap=town.goodsCap+town.techStageIdx*40;
+  const farmerCount=countByJob(town,'farmer');
+  const baseFoodProd=(2.2+town.techStageIdx*0.35)*town.population;
+  const farmerRatio=town.population>0?farmerCount/town.population:0;
+  const farmerBonus=1+farmerRatio*1.5;
+  const foodProd=baseFoodProd*farmerBonus*weatherFoodMult(town);
   const foodCons=town.population*2.0;
   town.food=clamp(town.food+foodProd-foodCons,0,town.foodCap+town.techStageIdx*80);
   const hungry=town.food<=0;
+
+  const minerCount=countByJob(town,'miner');
+  const materialsProd=minerCount*(4+town.techStageIdx*1.2);
+  town.materials=clamp(town.materials+materialsProd-town.population*0.08,0,matCap);
+
+  const artisanCount=countByJob(town,'artisan');
+  const goodsProduced=Math.min(artisanCount*(3+town.techStageIdx*0.8),town.materials);
+  town.materials=clamp(town.materials-goodsProduced,0,matCap);
+  town.goods=clamp(town.goods+goodsProduced-town.population*0.05,0,goodsCap);
+
+  const merchantCount=countByJob(town,'merchant');
+  const goodsSold=Math.min(merchantCount*3,town.goods);
+  town.goods=clamp(town.goods-goodsSold,0,goodsCap);
+  town.gold=clamp(town.gold+goodsSold*2,0,999999);
 
   for(const id of town.npcIds.slice()){
     const n=G.npcs[id];
@@ -825,8 +914,10 @@ function stepTown(town){
   town.population=Math.max(0,Math.round(trackedAlive+untracked+(untrackedBirths-untrackedDeaths)));
   if(town.population<=0){ town.alive=false; log(`${town.name} has fallen silent, its people gone.`,'death'); }
 
+  const wealthValues=town.npcIds.map(id=>G.npcs[id]?.wealth).filter(v=>v!=null);
+  town.gini=wealthValues.length>=2?giniCoefficient(wealthValues):0.3;
   const gov=GOVERNMENT_TYPES[town.government.type];
-  const inequality=0.2+Math.random()*0.2+gov.corruption*0.2;
+  const inequality=clamp(town.gini+gov.corruption*0.15,0,1);
   const crimeTarget=clamp(town.unrest*0.4+(hungry?28:0)+inequality*22-town.policeStrength*0.35,0,100);
   town.crimeRate=lerp(town.crimeRate,crimeTarget,0.06);
   town.unrest=clamp(town.unrest+(town.crimeRate>60?0.3:-0.2)+(activeDisease(town)?0.15:0)+(town.atWarWith.length?0.25:0)-gov.unrestDecay*0.4,0,100);
@@ -935,6 +1026,10 @@ function stepNpc(n,town,hungry){
   }
   n.health=clamp(n.health+(n.hunger>85?-0.6:0.15)+(n.disease?-0.5:0)+rand(-0.2,0.2),0,100);
 
+  if(n.status==='adult'||n.status==='elder'){
+    const wealthIncome={farmer:0.02,miner:0.03,artisan:0.05,merchant:0.08,laborer:0.015,unemployed:-0.02}[n.job]??0;
+    n.wealth=clamp(n.wealth+wealthIncome*(1+n.talent/200)+(n.notable?0.05:0)+rand(-0.02,0.02),0,999);
+  }
   if(n.status==='adult'){
     updateCrime(n,town);
     updateRelationship(n,town);
@@ -1271,6 +1366,43 @@ function maybeFoundColony(){
       return;
     }
   }
+}
+
+/* ============================== TRADE CARAVANS ============================== */
+function maybeSendCaravan(){
+  if(G.caravans.length>=6) return;
+  if(Math.random()>0.02) return;
+  const towns=livingTowns().filter(t=>t.techStageIdx>=1);
+  if(towns.length<2) return;
+  const from=choice(towns);
+  const partners=towns.filter(t=>t.id!==from.id)
+    .sort((a,b)=>Math.hypot(a.x-from.x,a.y-from.y)-Math.hypot(b.x-from.x,b.y-from.y));
+  if(!partners.length) return;
+  const to=partners[0];
+  let resource=null,amount=0;
+  if(from.goods>20){ resource='goods'; amount=Math.min(15,Math.floor(from.goods*0.3)); }
+  else if(from.materials>30){ resource='materials'; amount=Math.min(20,Math.floor(from.materials*0.3)); }
+  else if(from.food>from.foodCap*0.6){ resource='food'; amount=Math.min(30,Math.floor(from.food*0.2)); }
+  if(!resource||amount<=0) return;
+  from[resource]=Math.max(0,from[resource]-amount);
+  G.caravans.push({id:uid('cv'),fromTownId:from.id,toTownId:to.id,resource,amount,startTick:G.tickCount,duration:14});
+  markDirty('towns');
+}
+function stepCaravans(){
+  G.caravans=G.caravans.filter(c=>{
+    if(G.tickCount-c.startTick<c.duration) return true;
+    const to=townOf(c.toTownId), from=townOf(c.fromTownId);
+    if(to && to.alive){
+      if(c.resource==='goods') to.goods=clamp(to.goods+c.amount,0,to.goodsCap+to.techStageIdx*40);
+      else if(c.resource==='materials') to.materials=clamp(to.materials+c.amount,0,to.materialsCap+to.techStageIdx*60);
+      else if(c.resource==='food') to.food=clamp(to.food+c.amount,0,to.foodCap+to.techStageIdx*80);
+      const goldGain=Math.round(c.amount*1.5);
+      to.gold=clamp(to.gold-Math.round(goldGain*0.3),0,999999);
+      if(from && from.alive) from.gold=clamp(from.gold+goldGain,0,999999);
+      log(`A trade caravan from ${from?from.name:'a distant land'} delivers ${c.amount} ${c.resource} to ${to.name}.`,'general',{silent:true});
+    }
+    return false;
+  });
 }
 
 function checkEraAdvance(){
@@ -1662,6 +1794,16 @@ function drawMap(){
     ctx.fillText('👹',cx,cy);
     ctx.globalAlpha=1;
   }
+  for(const c of G.caravans){
+    const from=townOf(c.fromTownId), to=townOf(c.toTownId);
+    if(!from||!to) continue;
+    const t=clamp((G.tickCount-c.startTick)/c.duration,0,1);
+    const wx=lerp(from.x,to.x,t), wy=lerp(from.y,to.y,t);
+    const cx=offsetX+wx*tileSize+tileSize/2, cy=offsetY+wy*tileSize+tileSize/2;
+    ctx.font=`${Math.max(10,tileSize*1.1)}px serif`;
+    ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.fillText('🐪',cx,cy);
+  }
   if(G.pendingPower && G.pendingPower.def.target==='town-pair' && G.pendingPower.first){
     const t=G.pendingPower.first;
     const cx=offsetX+t.x*tileSize+tileSize/2, cy=offsetY+t.y*tileSize+tileSize/2;
@@ -1735,8 +1877,12 @@ function drawTownView(town){
     let px=hx,py=hy;
     if(awake){
       const seed=hashStr(n.id);
-      px=hx+Math.sin(phase*Math.PI*2*3+seed)*36;
-      py=hy+Math.cos(phase*Math.PI*2*2.3+seed*1.7)*36;
+      const hasJob=n.job&&n.job!=='laborer'&&n.job!=='unemployed';
+      const workplace=hasJob?town.buildings.find(bd=>bd.id===n.workplaceId):null;
+      const tx=workplace?workplace.x:hx, ty=workplace?workplace.y:hy;
+      const wobble=workplace?14:36;
+      px=tx+Math.sin(phase*Math.PI*2*3+seed)*wobble;
+      py=ty+Math.cos(phase*Math.PI*2*2.3+seed*1.7)*wobble;
     }
     const sx=offsetX+px*scale, sy=offsetY+py*scale;
     drawNpcDot(sx,sy,7,n);
@@ -1912,7 +2058,11 @@ function openTownModal(town){
       <div class="statRow"><span class="label">Gold</span><b>${Math.round(town.gold)}</b></div>
       <div class="statRow"><span class="label">Stability</span><b>${Math.round(town.government.stability)}</b></div>
       <div class="statRow"><span class="label">Atheism</span><b>${Math.round(town.secularism*100)}%</b></div>
+      <div class="statRow"><span class="label">Materials</span><b>${Math.round(town.materials)}</b></div>
+      <div class="statRow"><span class="label">Goods</span><b>${Math.round(town.goods)}</b></div>
+      <div class="statRow"><span class="label">Inequality</span><b>${(town.gini||0).toFixed(2)} Gini</b></div>
     </div>
+    <div class="mSub">Jobs: ${['farmer','miner','artisan','merchant','laborer'].map(j=>`${capitalize(j)} ${countByJob(town,j)}`).join(' · ')}</div>
     ${town.creed?`<div class="mSub">Creed: <b style="color:var(--gold)">${esc(town.creed.name)}</b></div>`:''}
     ${warHtml?`<div class="mSub">At war with: ${esc(warHtml)}</div>`:''}
     ${diseaseHtml?`<div class="panelHead">Disease</div>${diseaseHtml}`:''}
@@ -1941,6 +2091,7 @@ function openNpcModal(npc){
       <div>
         <h2 style="margin:0">${npc.custom?'✦ ':''}${esc(npc.name)}</h2>
         <div class="mSub" style="margin:2px 0 0">${esc(npc.status)}, age ${Math.floor(npc.age)} — ${esc(town?town.name:'')}${npc.notable?' — '+esc(npc.title):''} — ${npc.believer?'Believer':'Atheist'}</div>
+        <div class="mSub" style="margin:2px 0 0">${npc.status==='adult'||npc.status==='elder'?capitalize(npc.job)+' • ':''}Wealth ${Math.round(npc.wealth)}</div>
       </div>
     </div>
     ${pendingApplies?`<div class="pendingBanner"><span>Apply ${esc(pending.def.name)} to ${esc(npc.name)}?</span><button data-applynpc="${npc.id}">Apply</button></div>`:''}
@@ -2327,7 +2478,20 @@ function boot(){
     G._mutationModalOpen=false;
     G.viewMode='world'; G.viewingTownId=null;
     if(!G.grid) G.grid=buildGrid(60,36,G.seed);
-    G.towns.forEach(t=>{ t.buildings=t.buildings||[]; });
+    G.caravans=G.caravans||[];
+    G.towns.forEach(t=>{
+      t.buildings=t.buildings||[];
+      if(t.materials===undefined) t.materials=0;
+      if(t.materialsCap===undefined) t.materialsCap=200;
+      if(t.goods===undefined) t.goods=0;
+      if(t.goodsCap===undefined) t.goodsCap=150;
+      if(t.gini===undefined) t.gini=0.3;
+    });
+    Object.values(G.npcs).forEach(n=>{
+      if(n.job===undefined) n.job='unemployed';
+      if(n.workplaceId===undefined) n.workplaceId=null;
+      if(n.wealth===undefined) n.wealth=irand(5,25);
+    });
     if(G.offlineProgress){
       const lastReal=Number(localStorage.getItem(SAVE_KEY+'_time'))||Date.now();
       doOfflineCatchup(lastReal);
