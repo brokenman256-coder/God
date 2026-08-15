@@ -1849,12 +1849,15 @@ function getMapMetrics(){
   if(!G||!G.grid) return mapMetrics;
   const g=G.grid;
   const fitTileSize=Math.min(canvas.width/g.w,canvas.height/g.h);
-  const tileSize=Math.max(1,fitTileSize*camera.zoom);
-  const viewTilesW=canvas.width/tileSize, viewTilesH=canvas.height/tileSize;
+  const rawTileSize=Math.max(1,fitTileSize*camera.zoom);
+  const viewTilesW=canvas.width/rawTileSize, viewTilesH=canvas.height/rawTileSize;
   if(viewTilesW<g.w){ camera.x=clamp(camera.x,viewTilesW/2,g.w-viewTilesW/2); } else { camera.x=g.w/2; }
   if(viewTilesH<g.h){ camera.y=clamp(camera.y,viewTilesH/2,g.h-viewTilesH/2); } else { camera.y=g.h/2; }
-  const offX=canvas.width/2-camera.x*tileSize;
-  const offY=canvas.height/2-camera.y*tileSize;
+  // Snap to integer pixels so tile edges never sit on a fractional coordinate --
+  // canvas fillRect anti-aliases sub-pixel positions, which reads as a blurry map.
+  const tileSize=Math.max(1,Math.round(rawTileSize));
+  const offX=Math.round(canvas.width/2-camera.x*tileSize);
+  const offY=Math.round(canvas.height/2-camera.y*tileSize);
   mapMetrics={tileSize,offsetX:offX,offsetY:offY};
   return mapMetrics;
 }
