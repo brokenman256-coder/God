@@ -51,7 +51,11 @@ header#topbar h1{font-size:18px;margin:0;letter-spacing:3px;color:var(--gold);
 /* MAIN */
 main#mainArea{flex:1;display:flex;min-height:0;}
 #mapWrap{flex:1;position:relative;background:#000;min-width:0;}
-#mapCanvas{width:100%;height:100%;display:block;image-rendering:pixelated;cursor:crosshair;}
+#mapCanvas{width:100%;height:100%;display:block;image-rendering:pixelated;cursor:grab;touch-action:none;}
+#zoomControls{position:absolute;bottom:14px;right:14px;display:flex;flex-direction:column;gap:4px;z-index:12;}
+#zoomControls button{width:34px;height:34px;background:rgba(20,25,50,.9);border:1px solid var(--gold-dim);
+  color:var(--gold);border-radius:8px;font-size:18px;font-weight:700;line-height:1;}
+#zoomControls button:hover{border-color:var(--gold);background:rgba(30,36,66,.95);}
 #targetBanner{position:absolute;top:10px;left:50%;transform:translateX(-50%);
   background:rgba(20,25,50,.92);border:1px solid var(--gold);color:var(--gold);
   padding:7px 16px;border-radius:20px;font-size:13px;display:none;align-items:center;gap:10px;z-index:15;}
@@ -278,6 +282,7 @@ footer#chronicle.collapsed{height:30px;}
       <div id="tileTip"></div>
       <div id="toast"></div>
       <div id="voidHint">✦ Begin here — open <b>Powers</b> and speak Creation into being →</div>
+      <div id="zoomControls"><button id="zoomIn" title="Zoom in">+</button><button id="zoomOut" title="Zoom out">−</button></div>
     </div>
     <aside id="sidebar">
       <div id="tabs">
@@ -1818,6 +1823,11 @@ function findTownAt(tx,ty){
 const canvas=document.getElementById('mapCanvas');
 const ctx=canvas.getContext('2d');
 let mapMetrics={tileSize:10,offsetX:0,offsetY:0};
+const MIN_ZOOM=1, MAX_ZOOM=7;
+let camera={x:30,y:18,zoom:1};
+function resetCamera(){
+  if(G&&G.grid) camera={x:G.grid.w/2,y:G.grid.h/2,zoom:1};
+}
 
 function resizeCanvas(){
   const wrap=document.getElementById('mapWrap');
@@ -1838,16 +1848,69 @@ function renderCanvas(){
 function getMapMetrics(){
   if(!G||!G.grid) return mapMetrics;
   const g=G.grid;
-  const ts=Math.floor(Math.min(canvas.width/g.w,canvas.height/g.h));
-  const offX=Math.floor((canvas.width-ts*g.w)/2);
-  const offY=Math.floor((canvas.height-ts*g.h)/2);
-  mapMetrics={tileSize:Math.max(1,ts),offsetX:offX,offsetY:offY};
+  const fitTileSize=Math.min(canvas.width/g.w,canvas.height/g.h);
+  const tileSize=Math.max(1,fitTileSize*camera.zoom);
+  const viewTilesW=canvas.width/tileSize, viewTilesH=canvas.height/tileSize;
+  if(viewTilesW<g.w){ camera.x=clamp(camera.x,viewTilesW/2,g.w-viewTilesW/2); } else { camera.x=g.w/2; }
+  if(viewTilesH<g.h){ camera.y=clamp(camera.y,viewTilesH/2,g.h-viewTilesH/2); } else { camera.y=g.h/2; }
+  const offX=canvas.width/2-camera.x*tileSize;
+  const offY=canvas.height/2-camera.y*tileSize;
+  mapMetrics={tileSize,offsetX:offX,offsetY:offY};
   return mapMetrics;
+}
+function zoomMapAt(cx,cy,factor){
+  const g=G.grid; if(!g) return;
+  const fitTileSize=Math.min(canvas.width/g.w,canvas.height/g.h);
+  const tileSizeBefore=Math.max(1,fitTileSize*camera.zoom);
+  const worldX=camera.x+(cx-canvas.width/2)/tileSizeBefore;
+  const worldY=camera.y+(cy-canvas.height/2)/tileSizeBefore;
+  camera.zoom=clamp(camera.zoom*factor,MIN_ZOOM,MAX_ZOOM);
+  const tileSizeAfter=Math.max(1,fitTileSize*camera.zoom);
+  camera.x=worldX-(cx-canvas.width/2)/tileSizeAfter;
+  camera.y=worldY-(cy-canvas.height/2)/tileSizeAfter;
 }
 function tileRGB(type,variance){
   const base=TILE_COLOR[type]||[0,0,0];
   const v=(variance-0.5)*18;
   return `rgb(${clamp(base[0]+v,0,255)|0},${clamp(base[1]+v,0,255)|0},${clamp(base[2]+v,0,255)|0})`;
+}
+function drawTileDetail(type,px,py,size,seed){
+  if(size<11) return;
+  if(type===TILE.FOREST){
+    ctx.fillStyle='rgba(18,46,22,0.55)';
+    const n=size>24?3:2;
+    for(let i=0;i<n;i++){
+      const fx=(Math.sin(seed*91.7+i*17.3)+1)/2, fy=(Math.sin(seed*53.1+i*29.1)+1)/2;
+      const ox=px+(0.18+0.64*fx)*size, oy=py+(0.2+0.6*fy)*size, r=size*0.1;
+      ctx.beginPath(); ctx.moveTo(ox,oy-r); ctx.lineTo(ox-r,oy+r*0.8); ctx.lineTo(ox+r,oy+r*0.8); ctx.closePath(); ctx.fill();
+    }
+  } else if(type===TILE.MOUNTAIN){
+    ctx.fillStyle='rgba(255,255,255,0.4)';
+    ctx.beginPath();
+    ctx.moveTo(px+size*0.5,py+size*0.14); ctx.lineTo(px+size*0.63,py+size*0.36); ctx.lineTo(px+size*0.37,py+size*0.36);
+    ctx.closePath(); ctx.fill();
+    ctx.fillStyle='rgba(0,0,0,0.15)';
+    ctx.beginPath(); ctx.moveTo(px+size*0.5,py+size*0.5); ctx.lineTo(px+size*0.78,py+size*0.86); ctx.lineTo(px+size*0.22,py+size*0.86);
+    ctx.closePath(); ctx.fill();
+  } else if(type===TILE.WATER){
+    ctx.strokeStyle='rgba(255,255,255,0.16)'; ctx.lineWidth=Math.max(1,size*0.035);
+    ctx.beginPath();
+    ctx.moveTo(px+size*0.12,py+size*0.55+Math.sin(seed*40)*size*0.06);
+    ctx.quadraticCurveTo(px+size*0.5,py+size*0.4,px+size*0.88,py+size*0.55+Math.cos(seed*40)*size*0.06);
+    ctx.stroke();
+  } else if(type===TILE.DESERT){
+    ctx.strokeStyle='rgba(110,80,35,0.3)'; ctx.lineWidth=Math.max(1,size*0.03);
+    ctx.beginPath(); ctx.moveTo(px+size*0.1,py+size*0.62); ctx.quadraticCurveTo(px+size*0.5,py+size*0.46,px+size*0.9,py+size*0.62); ctx.stroke();
+  } else if(type===TILE.ICE){
+    ctx.fillStyle='rgba(255,255,255,0.65)';
+    ctx.beginPath(); ctx.arc(px+size*0.5,py+size*0.5,size*0.06,0,Math.PI*2); ctx.fill();
+  } else if(type===TILE.LAND && size>16){
+    ctx.strokeStyle='rgba(16,42,16,0.22)'; ctx.lineWidth=1;
+    ctx.beginPath();
+    ctx.moveTo(px+size*0.34,py+size*0.72); ctx.lineTo(px+size*0.34,py+size*0.55);
+    ctx.moveTo(px+size*0.64,py+size*0.74); ctx.lineTo(px+size*0.64,py+size*0.6);
+    ctx.stroke();
+  }
 }
 function overlayColor(o,pulse){
   if(o.type==='rain') return 'rgba(80,140,220,0.35)';
@@ -1867,15 +1930,21 @@ function drawMap(){
   ctx.fillStyle='#050610';
   ctx.fillRect(0,0,canvas.width,canvas.height);
   const pulse=(Math.sin(Date.now()/300)+1)/2;
-  for(let y=0;y<g.h;y++){
-    for(let x=0;x<g.w;x++){
+  const x0=Math.max(0,Math.floor(-offsetX/tileSize));
+  const x1=Math.min(g.w-1,Math.ceil((canvas.width-offsetX)/tileSize));
+  const y0=Math.max(0,Math.floor(-offsetY/tileSize));
+  const y1=Math.min(g.h-1,Math.ceil((canvas.height-offsetY)/tileSize));
+  for(let y=y0;y<=y1;y++){
+    for(let x=x0;x<=x1;x++){
       const i=idx(g,x,y);
+      const px=offsetX+x*tileSize, py=offsetY+y*tileSize;
       ctx.fillStyle=tileRGB(g.tiles[i],g.variance[i]);
-      ctx.fillRect(offsetX+x*tileSize,offsetY+y*tileSize,tileSize+1,tileSize+1);
+      ctx.fillRect(px,py,tileSize+1,tileSize+1);
+      drawTileDetail(g.tiles[i],px,py,tileSize,g.variance[i]);
       const o=g.overlay[i];
       if(o){
         ctx.fillStyle=overlayColor(o,pulse);
-        ctx.fillRect(offsetX+x*tileSize,offsetY+y*tileSize,tileSize+1,tileSize+1);
+        ctx.fillRect(px,py,tileSize+1,tileSize+1);
       }
     }
   }
@@ -2012,6 +2081,93 @@ function enterTownView(townId){
 function exitTownView(){
   G.viewMode='world'; G.viewingTownId=null;
   document.getElementById('townViewBar').style.display='none';
+}
+
+/* ============================== MAP INPUT: PAN, ZOOM, TAP ============================== */
+function handleMapTap(clientX,clientY){
+  const rect=canvas.getBoundingClientRect();
+  const scaleX=canvas.width/rect.width, scaleY=canvas.height/rect.height;
+  const cx=(clientX-rect.left)*scaleX, cy=(clientY-rect.top)*scaleY;
+  if(G.viewMode==='town'){
+    const town=townOf(G.viewingTownId);
+    if(!town) return;
+    let closest=null, closestD=24*24;
+    for(const id of town.npcIds){
+      const n=G.npcs[id]; if(!n||!n.alive) continue;
+      const p=townViewScreenPos[n.id]; if(!p) continue;
+      const d=(cx-p.x)*(cx-p.x)+(cy-p.y)*(cy-p.y);
+      if(d<closestD){ closestD=d; closest=n; }
+    }
+    if(closest) openNpcModal(closest);
+    return;
+  }
+  const {tileSize,offsetX,offsetY}=getMapMetrics();
+  const tx=Math.floor((cx-offsetX)/tileSize), ty=Math.floor((cy-offsetY)/tileSize);
+  if(!G.grid||!inBounds(G.grid,tx,ty)) return;
+  if(G.pendingPower){ resolvePowerTarget(tx,ty); return; }
+  const town=findTownAt(tx,ty);
+  if(town){ openTownModal(town); return; }
+  if(G.genesisStep<GENESIS_STEPS.length){ toast('The world is still void. Begin with the Genesis powers →'); }
+}
+function wireMapInput(){
+  const activePointers=new Map();
+  let dragMode=null, panStart=null, pinchStart=null;
+  canvas.addEventListener('pointerdown',(e)=>{
+    try{ canvas.setPointerCapture(e.pointerId); }catch(err){}
+    activePointers.set(e.pointerId,{x:e.clientX,y:e.clientY});
+    if(activePointers.size===1){
+      dragMode='pan';
+      panStart={camX:camera.x,camY:camera.y,x:e.clientX,y:e.clientY,moved:false};
+    } else if(activePointers.size===2){
+      dragMode='pinch';
+      const pts=[...activePointers.values()];
+      pinchStart={dist:Math.hypot(pts[0].x-pts[1].x,pts[0].y-pts[1].y),zoom:camera.zoom};
+    }
+  });
+  canvas.addEventListener('pointermove',(e)=>{
+    if(!activePointers.has(e.pointerId)) return;
+    activePointers.set(e.pointerId,{x:e.clientX,y:e.clientY});
+    if(dragMode==='pan' && activePointers.size===1 && panStart && G.viewMode==='world'){
+      const rect=canvas.getBoundingClientRect();
+      const scaleX=canvas.width/rect.width, scaleY=canvas.height/rect.height;
+      const dxCss=e.clientX-panStart.x, dyCss=e.clientY-panStart.y;
+      if(Math.abs(dxCss)>4||Math.abs(dyCss)>4) panStart.moved=true;
+      const {tileSize}=getMapMetrics();
+      camera.x=panStart.camX-(dxCss*scaleX)/tileSize;
+      camera.y=panStart.camY-(dyCss*scaleY)/tileSize;
+    } else if(dragMode==='pinch' && activePointers.size===2 && pinchStart && G.viewMode==='world'){
+      const pts=[...activePointers.values()];
+      const dist=Math.hypot(pts[0].x-pts[1].x,pts[0].y-pts[1].y);
+      camera.zoom=clamp(pinchStart.zoom*(dist/(pinchStart.dist||1)),MIN_ZOOM,MAX_ZOOM);
+    } else if(dragMode==='pan' && panStart){
+      const dxCss=e.clientX-panStart.x, dyCss=e.clientY-panStart.y;
+      if(Math.abs(dxCss)>4||Math.abs(dyCss)>4) panStart.moved=true;
+    }
+  });
+  function endPointer(e){
+    const wasTap=dragMode==='pan' && panStart && !panStart.moved && activePointers.size===1;
+    const tapX=e.clientX, tapY=e.clientY;
+    activePointers.delete(e.pointerId);
+    if(wasTap) handleMapTap(tapX,tapY);
+    if(activePointers.size===0){ dragMode=null; panStart=null; pinchStart=null; }
+    else if(activePointers.size===1){
+      const [,pos]=[...activePointers.entries()][0];
+      dragMode='pan';
+      panStart={camX:camera.x,camY:camera.y,x:pos.x,y:pos.y,moved:true};
+    }
+  }
+  canvas.addEventListener('pointerup',endPointer);
+  canvas.addEventListener('pointercancel',endPointer);
+  canvas.addEventListener('wheel',(e)=>{
+    if(G.viewMode!=='world') return;
+    e.preventDefault();
+    const rect=canvas.getBoundingClientRect();
+    const scaleX=canvas.width/rect.width, scaleY=canvas.height/rect.height;
+    const cx=(e.clientX-rect.left)*scaleX, cy=(e.clientY-rect.top)*scaleY;
+    zoomMapAt(cx,cy,e.deltaY<0?1.15:1/1.15);
+  },{passive:false});
+  document.getElementById('zoomIn').addEventListener('click',()=>zoomMapAt(canvas.width/2,canvas.height/2,1.35));
+  document.getElementById('zoomOut').addEventListener('click',()=>zoomMapAt(canvas.width/2,canvas.height/2,1/1.35));
 }
 
 /* ============================== UI: HEADER ============================== */
@@ -2544,31 +2700,7 @@ function initUI(){
     }
   });
 
-  canvas.addEventListener('click',(e)=>{
-    const rect=canvas.getBoundingClientRect();
-    const scaleX=canvas.width/rect.width, scaleY=canvas.height/rect.height;
-    const cx=(e.clientX-rect.left)*scaleX, cy=(e.clientY-rect.top)*scaleY;
-    if(G.viewMode==='town'){
-      const town=townOf(G.viewingTownId);
-      if(!town) return;
-      let closest=null, closestD=24*24;
-      for(const id of town.npcIds){
-        const n=G.npcs[id]; if(!n||!n.alive) continue;
-        const p=townViewScreenPos[n.id]; if(!p) continue;
-        const d=(cx-p.x)*(cx-p.x)+(cy-p.y)*(cy-p.y);
-        if(d<closestD){ closestD=d; closest=n; }
-      }
-      if(closest) openNpcModal(closest);
-      return;
-    }
-    const {tileSize,offsetX,offsetY}=getMapMetrics();
-    const tx=Math.floor((cx-offsetX)/tileSize), ty=Math.floor((cy-offsetY)/tileSize);
-    if(!G.grid||!inBounds(G.grid,tx,ty)) return;
-    if(G.pendingPower){ resolvePowerTarget(tx,ty); return; }
-    const town=findTownAt(tx,ty);
-    if(town){ openTownModal(town); return; }
-    if(G.genesisStep<GENESIS_STEPS.length){ toast('The world is still void. Begin with the Genesis powers →'); }
-  });
+  wireMapInput();
   document.getElementById('backToWorld').addEventListener('click',exitTownView);
   window.addEventListener('resize',resizeCanvas);
 }
@@ -2775,6 +2907,7 @@ function boot(){
     G=initNewGame();
     G.grid=buildGrid(60,36,G.seed);
   }
+  resetCamera();
   document.getElementById('loading').style.display='none';
   document.getElementById('app').style.display='flex';
   initUI();
