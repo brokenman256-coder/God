@@ -53,6 +53,11 @@ main#mainArea{flex:1;display:flex;min-height:0;}
   background:rgba(20,25,50,.92);border:1px solid var(--gold);color:var(--gold);
   padding:7px 16px;border-radius:20px;font-size:13px;display:none;align-items:center;gap:10px;z-index:15;}
 #targetBanner button{background:var(--bad);color:#fff;border:none;border-radius:12px;padding:3px 10px;font-size:11px;}
+#townViewBar{position:absolute;top:10px;left:10px;background:rgba(20,25,50,.92);border:1px solid var(--gold-dim);
+  color:var(--text);padding:7px 12px;border-radius:10px;font-size:12px;display:none;align-items:center;gap:12px;z-index:15;}
+#townViewBar button{background:var(--panel2);color:var(--gold);border:1px solid var(--gold-dim);border-radius:6px;padding:4px 9px;font-size:11px;}
+#townViewBar #townViewName{font-weight:700;color:var(--gold);}
+#townViewBar #townViewClock{color:var(--text-dim);}
 #toast{position:absolute;bottom:14px;left:50%;transform:translateX(-50%);
   background:rgba(20,25,50,.95);border:1px solid var(--border);color:var(--text);
   padding:8px 16px;border-radius:8px;font-size:12px;opacity:0;pointer-events:none;transition:opacity .3s;z-index:15;}
@@ -242,6 +247,7 @@ footer#chronicle.collapsed{height:30px;}
     <div id="mapWrap">
       <canvas id="mapCanvas"></canvas>
       <div id="targetBanner"><span id="targetText"></span><button id="cancelTarget">cancel</button></div>
+      <div id="townViewBar"><button id="backToWorld">← Back to World</button><span id="townViewName"></span><span id="townViewClock"></span></div>
       <div id="tileTip"></div>
       <div id="toast"></div>
     </div>
@@ -528,7 +534,8 @@ function initNewGame(){
     souls:{heaven:[],hell:[],limbo:[]},
     pendingPower:null, offlineProgress:true,
     stats:{totalBirths:0,totalDeaths:0,totalPrayersAnswered:0,totalPrayersDenied:0},
-    dirty:{powers:true,prayers:true,specimen:true,towns:true,header:true}
+    dirty:{powers:true,prayers:true,specimen:true,towns:true,header:true},
+    viewMode:'world', viewingTownId:null
   };
 }
 
@@ -543,9 +550,62 @@ function createTown(x,y,name){
     diseases:[], atWarWith:[], tension:{},
     npcIds:[], notableIds:[], messiahId:null, alive:true, guardBoostUntil:0,
     government:{type:'chiefdom',leaderId:null,stability:60,since:G.tickCount},
-    secularism:0.03
+    secularism:0.03, buildings:[]
   };
   return t;
+}
+
+/* ============================== TOWN VIEW: BUILDINGS & LAYOUT ============================== */
+const TOWN_VIEW_SIZE=640;
+const BUILDING_TYPES={
+  tent:{icon:'⛺'}, house:{icon:'🏠'}, farm:{icon:'🌾'}, temple:{icon:'🛕'},
+  hall:{icon:'🏛️'}, hospital:{icon:'🏥'}
+};
+function hashStr(s){
+  let h=0; for(let i=0;i<s.length;i++){ h=(h*31+s.charCodeAt(i))|0; }
+  return (h>>>0)%1000/1000*Math.PI*2;
+}
+function seededTownRng(town){
+  let h=0; for(let i=0;i<town.id.length;i++){ h=(h*31+town.id.charCodeAt(i))>>>0; }
+  return mulberry32((h^town.foundedTick)>>>0);
+}
+function placeBuilding(town,type){
+  town.buildings=town.buildings||[];
+  const rng=town._layoutRng||(town._layoutRng=seededTownRng(town));
+  const minDist=54;
+  let best=null,bestD=-1;
+  for(let attempt=0;attempt<40;attempt++){
+    const x=40+rng()*(TOWN_VIEW_SIZE-80);
+    const y=40+rng()*(TOWN_VIEW_SIZE-80);
+    let minToExisting=town.buildings.length?Infinity:9999;
+    for(const b of town.buildings){ const d=Math.hypot(b.x-x,b.y-y); if(d<minToExisting) minToExisting=d; }
+    if(minToExisting>=minDist){ town.buildings.push({id:uid('bld'),type,x,y}); return; }
+    if(minToExisting>bestD){ bestD=minToExisting; best={x,y}; }
+  }
+  if(best) town.buildings.push({id:uid('bld'),type,x:best.x,y:best.y});
+}
+function syncTownBuildings(town){
+  town.buildings=town.buildings||[];
+  const houseType=town.techStageIdx<=1?'tent':'house';
+  const desiredHouses=Math.max(1,Math.ceil(town.population/5));
+  let houses=town.buildings.filter(b=>b.type==='house'||b.type==='tent');
+  while(houses.length<desiredHouses && town.buildings.length<60){
+    placeBuilding(town,houseType);
+    houses=town.buildings.filter(b=>b.type==='house'||b.type==='tent');
+  }
+  const desiredFarms=Math.max(1,Math.ceil(town.population/15));
+  let farms=town.buildings.filter(b=>b.type==='farm');
+  while(farms.length<desiredFarms && farms.length<14){
+    placeBuilding(town,'farm');
+    farms=town.buildings.filter(b=>b.type==='farm');
+  }
+  if(!town.buildings.some(b=>b.type==='hall')) placeBuilding(town,'hall');
+  if((town.worship>=30||town.creed) && !town.buildings.some(b=>b.type==='temple')) placeBuilding(town,'temple');
+  if(activeDisease(town) && !town.buildings.some(b=>b.type==='hospital')) placeBuilding(town,'hospital');
+}
+function ensureHome(npc,town){
+  const houses=town.buildings.filter(b=>b.type==='house'||b.type==='tent');
+  if(houses.length) npc.homeId=choice(houses).id;
 }
 function makeNpc(opts){
   const sex=opts.sex||(Math.random()<0.5?'m':'f');
@@ -595,6 +655,8 @@ function addNpcToTown(town,npc){
   npc.townId=town.id;
   G.npcs[npc.id]=npc;
   town.npcIds.push(npc.id);
+  syncTownBuildings(town);
+  ensureHome(npc,town);
   pruneTownRoster(town);
 }
 function pruneTownRoster(town){
@@ -729,6 +791,7 @@ function decayOverlays(){
 }
 
 function stepTown(town){
+  syncTownBuildings(town);
   const foodProd=(2.2+town.techStageIdx*0.35)*town.population*weatherFoodMult(town);
   const foodCons=town.population*2.0;
   town.food=clamp(town.food+foodProd-foodCons,0,town.foodCap+town.techStageIdx*80);
@@ -1460,6 +1523,7 @@ function selectPower(id){
     return;
   }
   if(G.favor<p.cost){ toast('Not enough favor.'); return; }
+  if((p.target==='tile'||p.target==='town'||p.target==='town-pair') && G.viewMode==='town') exitTownView();
   G.pendingPower={def:p,first:null};
   markDirty('powers');
   updateTargetBanner();
@@ -1524,7 +1588,16 @@ function resizeCanvas(){
   const dpr=Math.min(window.devicePixelRatio||1,2);
   canvas.width=Math.floor(wrap.clientWidth*dpr);
   canvas.height=Math.floor(wrap.clientHeight*dpr);
-  drawMap();
+  renderCanvas();
+}
+function renderCanvas(){
+  if(G.viewMode==='town'){
+    const town=townOf(G.viewingTownId);
+    if(!town||!town.alive){ exitTownView(); drawMap(); }
+    else drawTownView(town);
+  } else {
+    drawMap();
+  }
 }
 function getMapMetrics(){
   if(!G||!G.grid) return mapMetrics;
@@ -1595,6 +1668,95 @@ function drawMap(){
     ctx.strokeStyle='#e8c468'; ctx.lineWidth=2;
     ctx.beginPath(); ctx.arc(cx,cy,tileSize*1.4,0,Math.PI*2); ctx.stroke();
   }
+}
+
+/* ============================== TOWN VIEW: LIVING WORLD ============================== */
+/* Purely a camera/visual mode: NPC "wander" positions here are cosmetic and driven by
+   real elapsed time, not the simulation tick -- they never touch population, mortality,
+   or fertility math. The simulation keeps advancing normally underneath this view. */
+const COSMETIC_DAY_MS=26000;
+let cosmeticStart=performance.now();
+let townViewScreenPos={};
+function dayPhase(){ return ((performance.now()-cosmeticStart)%COSMETIC_DAY_MS)/COSMETIC_DAY_MS; }
+function dayBrightness(phase){ return (Math.cos((phase-0.5)*2*Math.PI)+1)/2; }
+function getTownViewMetrics(){
+  const size=Math.min(canvas.width,canvas.height)*0.92;
+  const offsetX=(canvas.width-size)/2, offsetY=(canvas.height-size)/2;
+  return {scale:size/TOWN_VIEW_SIZE,offsetX,offsetY,size};
+}
+function drawNpcDot(cx,cy,r,n){
+  const skin=SKIN_TONES[n.appearance?.skin??0]||SKIN_TONES[0];
+  const hair=HAIR_COLORS[n.appearance?.hairColor??0]||HAIR_COLORS[0];
+  ctx.beginPath(); ctx.arc(cx,cy,r,0,Math.PI*2);
+  ctx.fillStyle=skin; ctx.fill();
+  ctx.strokeStyle='rgba(0,0,0,0.45)'; ctx.lineWidth=1; ctx.stroke();
+  ctx.beginPath(); ctx.arc(cx,cy-r*0.5,r*0.78,Math.PI,0);
+  ctx.fillStyle=hair; ctx.fill();
+  if(n.notable){
+    ctx.beginPath(); ctx.arc(cx,cy,r+2.5,0,Math.PI*2);
+    ctx.strokeStyle='rgba(232,196,104,0.9)'; ctx.lineWidth=1.5; ctx.stroke();
+  }
+}
+function drawTownView(town){
+  const {scale,offsetX,offsetY,size}=getTownViewMetrics();
+  const phase=dayPhase();
+  const b=dayBrightness(phase);
+  const g=G.grid;
+  const baseTile=g?g.tiles[idx(g,town.x,town.y)]:TILE.LAND;
+  const baseColor=TILE_COLOR[baseTile]||TILE_COLOR[TILE.LAND];
+  const bright=0.45+0.55*b;
+  ctx.fillStyle=`rgb(${Math.round(baseColor[0]*bright)},${Math.round(baseColor[1]*bright)},${Math.round(baseColor[2]*bright)})`;
+  ctx.fillRect(0,0,canvas.width,canvas.height);
+  if(b<0.4){
+    const starRng=mulberry32(1337);
+    ctx.fillStyle=`rgba(255,255,255,${0.15+(0.4-b)})`;
+    for(let i=0;i<70;i++){ ctx.fillRect(starRng()*canvas.width,starRng()*canvas.height*0.6,1.6,1.6); }
+  }
+  ctx.fillStyle='rgba(0,0,0,0.15)';
+  ctx.fillRect(offsetX,offsetY,size,size);
+  ctx.strokeStyle='rgba(232,196,104,0.25)'; ctx.lineWidth=2;
+  ctx.strokeRect(offsetX,offsetY,size,size);
+
+  const fontSize=Math.max(14,26*scale);
+  ctx.textAlign='center'; ctx.textBaseline='middle';
+  for(const bld of town.buildings){
+    const bx=offsetX+bld.x*scale, by=offsetY+bld.y*scale;
+    ctx.font=`${fontSize}px serif`;
+    ctx.fillText(BUILDING_TYPES[bld.type]?.icon||'🏠',bx,by);
+  }
+
+  townViewScreenPos={};
+  const npcs=town.npcIds.map(id=>G.npcs[id]).filter(n=>n&&n.alive);
+  const awake=b>0.32;
+  for(const n of npcs){
+    let home=town.buildings.find(bd=>bd.id===n.homeId);
+    if(!home){ ensureHome(n,town); home=town.buildings.find(bd=>bd.id===n.homeId); }
+    const hx=home?home.x:TOWN_VIEW_SIZE/2, hy=home?home.y:TOWN_VIEW_SIZE/2;
+    let px=hx,py=hy;
+    if(awake){
+      const seed=hashStr(n.id);
+      px=hx+Math.sin(phase*Math.PI*2*3+seed)*36;
+      py=hy+Math.cos(phase*Math.PI*2*2.3+seed*1.7)*36;
+    }
+    const sx=offsetX+px*scale, sy=offsetY+py*scale;
+    drawNpcDot(sx,sy,7,n);
+    townViewScreenPos[n.id]={x:sx,y:sy};
+  }
+
+  const nameEl=document.getElementById('townViewName');
+  const clockEl=document.getElementById('townViewClock');
+  if(nameEl) nameEl.textContent=town.name;
+  if(clockEl) clockEl.textContent=b>0.5?'☀️ Day':'🌙 Night';
+}
+function enterTownView(townId){
+  clearPending();
+  G.viewMode='town'; G.viewingTownId=townId;
+  document.getElementById('townViewBar').style.display='flex';
+  closeModal();
+}
+function exitTownView(){
+  G.viewMode='world'; G.viewingTownId=null;
+  document.getElementById('townViewBar').style.display='none';
 }
 
 /* ============================== UI: HEADER ============================== */
@@ -1755,6 +1917,7 @@ function openTownModal(town){
     ${warHtml?`<div class="mSub">At war with: ${esc(warHtml)}</div>`:''}
     ${diseaseHtml?`<div class="panelHead">Disease</div>${diseaseHtml}`:''}
     <div class="actionRow">
+      <button data-enter-town="${town.id}">🔎 Enter Town</button>
       <button data-townact="sendGuards" data-town="${town.id}">🛡️ Send Guards (10)</button>
       <button data-townact="sendHealers" data-town="${town.id}" ${diseaseHtml?'':'disabled'}>⚕️ Send Healers (12)</button>
     </div>
@@ -1946,7 +2109,7 @@ function showOfflineSummary(s){
 function renderAll(){
   renderHeader(); renderPowers(); renderPrayers(); renderSpecimen(); renderTowns();
   populateEraJump();
-  drawMap();
+  renderCanvas();
 }
 function renderDirty(){
   if(G.dirty.header){ renderHeader(); G.dirty.header=false; }
@@ -2012,6 +2175,8 @@ function initUI(){
     if(e.target.id==='modalRoot' && !document.getElementById('modalRoot')._blockClose){ closeModal(); return; }
     const close=e.target.closest('[data-close]');
     if(close){ if(!document.getElementById('modalRoot')._blockClose){ closeModal(); } return; }
+    const enterTown=e.target.closest('[data-enter-town]');
+    if(enterTown){ enterTownView(enterTown.dataset.enterTown); return; }
     const townAct=e.target.closest('[data-townact]');
     if(townAct){
       const town=townOf(townAct.dataset.town);
@@ -2067,6 +2232,19 @@ function initUI(){
     const rect=canvas.getBoundingClientRect();
     const scaleX=canvas.width/rect.width, scaleY=canvas.height/rect.height;
     const cx=(e.clientX-rect.left)*scaleX, cy=(e.clientY-rect.top)*scaleY;
+    if(G.viewMode==='town'){
+      const town=townOf(G.viewingTownId);
+      if(!town) return;
+      let closest=null, closestD=24*24;
+      for(const id of town.npcIds){
+        const n=G.npcs[id]; if(!n||!n.alive) continue;
+        const p=townViewScreenPos[n.id]; if(!p) continue;
+        const d=(cx-p.x)*(cx-p.x)+(cy-p.y)*(cy-p.y);
+        if(d<closestD){ closestD=d; closest=n; }
+      }
+      if(closest) openNpcModal(closest);
+      return;
+    }
     const {tileSize,offsetX,offsetY}=getMapMetrics();
     const tx=Math.floor((cx-offsetX)/tileSize), ty=Math.floor((cy-offsetY)/tileSize);
     if(!G.grid||!inBounds(G.grid,tx,ty)) return;
@@ -2074,6 +2252,7 @@ function initUI(){
     const town=findTownAt(tx,ty);
     if(town) openTownModal(town);
   });
+  document.getElementById('backToWorld').addEventListener('click',exitTownView);
   window.addEventListener('resize',resizeCanvas);
 }
 
@@ -2134,7 +2313,7 @@ function gameLoop(ts){
     let guard=0;
     while(tickAccum>interval && guard<50){ tickAccum-=interval; simulateTick(); guard++; }
   }
-  drawMap();
+  renderCanvas();
   renderDirty();
   requestAnimationFrame(gameLoop);
 }
@@ -2146,7 +2325,9 @@ function boot(){
     G=saved;
     G.dirty={powers:true,prayers:true,specimen:true,towns:true,header:true};
     G._mutationModalOpen=false;
+    G.viewMode='world'; G.viewingTownId=null;
     if(!G.grid) G.grid=buildGrid(60,36,G.seed);
+    G.towns.forEach(t=>{ t.buildings=t.buildings||[]; });
     if(G.offlineProgress){
       const lastReal=Number(localStorage.getItem(SAVE_KEY+'_time'))||Date.now();
       doOfflineCatchup(lastReal);
