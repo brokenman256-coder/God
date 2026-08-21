@@ -3483,8 +3483,9 @@ function listPeople(townIndex){
 function setEra(name){
   const i=ERAS.findIndex(e=>e.toLowerCase()===String(name).toLowerCase());
   if(i===-1) return 'Unknown era. Try one of: '+ERAS.join(', ');
+  if(i<=G.era) return `Already at or beyond ${ERAS[i]} (currently ${ERAS[G.era]}).`;
   fastForwardToEra(i);
-  return `Leapt to ${ERAS[i]}.`;
+  return G.era>=i ? `Leapt to ${ERAS[G.era]}.` : `Only reached ${ERAS[G.era]} so far -- call setEra("${name}") again to push further.`;
 }
 function help(){
   return [
