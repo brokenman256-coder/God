@@ -1456,10 +1456,11 @@ function denyPrayer(id){
   markDirty('prayers');
 }
 
+const MAX_TOWNS=25;
 function maybeFoundColony(){
-  if(G.towns.filter(t=>t.alive).length>=10) return;
+  if(G.towns.filter(t=>t.alive).length>=MAX_TOWNS) return;
   for(const town of livingTowns()){
-    if(town.population>220 && Math.random()<0.001){
+    if(town.population>160 && Math.random()<0.002){
       const site=findGoodTownSite();
       const nt=createTown(site.x,site.y,randomTownName());
       nt.techStageIdx=Math.max(0,town.techStageIdx-1);
@@ -2068,7 +2069,45 @@ function drawPersonHair(style,color,headR,cy){
    figures read as bodies, not flat stickers. `detailed` is an LOD switch: full
    face+hair at normal/close zoom, a plain shaded silhouette when a country's
    population is too large to render every face at once at a glance. */
-function drawPersonFigure(r,app,status,detailed,walking,walkPhase){
+/* Vector-drawn tools, not emoji glyphs: color-bitmap emoji fonts (Noto Color
+   Emoji in particular) can render wildly oversized at the large explicit pixel
+   sizes the focus camera zooms to, so tool icons are drawn the same way the
+   rest of the figure is -- plain canvas primitives that scale exactly with r
+   on every device. */
+function drawWorkTool(job,r,workPhase){
+  if(!['farmer','miner','artisan','merchant'].includes(job)) return;
+  const bob=Math.abs(Math.sin(workPhase||0))*r*0.3;
+  const rot=Math.sin(workPhase||0)*0.6;
+  const len=r*0.9;
+  ctx.save();
+  ctx.translate(r*0.95,-r*0.1-bob);
+  ctx.rotate(rot);
+  ctx.lineCap='round';
+  if(job==='miner'){
+    ctx.strokeStyle='#7a6a55'; ctx.lineWidth=Math.max(1.4,r*0.14);
+    ctx.beginPath(); ctx.moveTo(0,len*0.35); ctx.lineTo(0,-len*0.55); ctx.stroke();
+    ctx.strokeStyle='#c8c8d0'; ctx.lineWidth=Math.max(1.6,r*0.16);
+    ctx.beginPath(); ctx.moveTo(-len*0.42,-len*0.65); ctx.lineTo(len*0.42,-len*0.65); ctx.stroke();
+  } else if(job==='artisan'){
+    ctx.strokeStyle='#7a5a3a'; ctx.lineWidth=Math.max(1.4,r*0.14);
+    ctx.beginPath(); ctx.moveTo(0,len*0.4); ctx.lineTo(0,-len*0.4); ctx.stroke();
+    ctx.fillStyle='#8a8a92';
+    ctx.fillRect(-len*0.32,-len*0.62,len*0.64,len*0.3);
+  } else if(job==='farmer'){
+    ctx.strokeStyle='#7a6a4a'; ctx.lineWidth=Math.max(1.3,r*0.12);
+    ctx.beginPath(); ctx.moveTo(0,len*0.4); ctx.lineTo(0,-len*0.5); ctx.stroke();
+    ctx.strokeStyle='#c9a227'; ctx.lineWidth=Math.max(1.2,r*0.1);
+    for(const a of [-0.5,-0.15,0.2,0.5]){
+      ctx.beginPath(); ctx.moveTo(0,-len*0.5); ctx.lineTo(Math.sin(a)*len*0.35,-len*0.5-Math.cos(a)*len*0.35); ctx.stroke();
+    }
+  } else if(job==='merchant'){
+    ctx.fillStyle='#e8c25a';
+    ctx.beginPath(); ctx.arc(0,0,len*0.32,0,Math.PI*2); ctx.fill();
+    ctx.strokeStyle='#8a6a20'; ctx.lineWidth=Math.max(1,r*0.06); ctx.stroke();
+  }
+  ctx.restore();
+}
+function drawPersonFigure(r,app,status,detailed,walking,walkPhase,working,workPhase,job){
   app=app||{};
   const skin=SKIN_TONES[app.skin??2]||SKIN_TONES[2];
   const clothing=CLOTHING_COLORS[app.clothingColor??0]||CLOTHING_COLORS[0];
@@ -2080,20 +2119,21 @@ function drawPersonFigure(r,app,status,detailed,walking,walkPhase){
   const headCy=-r*0.28;
   const hipY=r*0.5+bodyH*0.42;
   const limbLen=r*(isChild?0.4:0.6);
-  const swing=walking?Math.sin(walkPhase||0)*limbLen*0.5:0;
+  const legSwing=walking?Math.sin(walkPhase||0)*limbLen*0.5:0;
+  const armSwing=walking?Math.sin(walkPhase||0)*limbLen*0.5:(working?Math.sin(workPhase||0)*limbLen*0.65:0);
 
   ctx.strokeStyle=shadeHex(clothing,-32);
   ctx.lineWidth=Math.max(1.3,r*0.15);
   ctx.lineCap='round';
   ctx.beginPath();
-  ctx.moveTo(-bodyW*0.3,hipY); ctx.lineTo(-bodyW*0.3+swing,hipY+limbLen);
-  ctx.moveTo(bodyW*0.3,hipY); ctx.lineTo(bodyW*0.3-swing,hipY+limbLen);
+  ctx.moveTo(-bodyW*0.3,hipY); ctx.lineTo(-bodyW*0.3+legSwing,hipY+limbLen);
+  ctx.moveTo(bodyW*0.3,hipY); ctx.lineTo(bodyW*0.3-legSwing,hipY+limbLen);
   ctx.stroke();
   ctx.strokeStyle=shadeHex(skin,-15);
   ctx.lineWidth=Math.max(1,r*0.11);
   ctx.beginPath();
-  ctx.moveTo(-bodyW*0.75,r*0.15); ctx.lineTo(-bodyW*0.75-swing*0.6,r*0.15+limbLen*0.7);
-  ctx.moveTo(bodyW*0.75,r*0.15); ctx.lineTo(bodyW*0.75+swing*0.6,r*0.15+limbLen*0.7);
+  ctx.moveTo(-bodyW*0.75,r*0.15); ctx.lineTo(-bodyW*0.75-armSwing*0.6,r*0.15+limbLen*0.7);
+  ctx.moveTo(bodyW*0.75,r*0.15); ctx.lineTo(bodyW*0.75+armSwing*0.6,r*0.15+limbLen*0.7);
   ctx.stroke();
 
   const bodyGrad=ctx.createLinearGradient(-bodyW,r*0.5-bodyH*0.5,bodyW,r*0.5+bodyH*0.5);
@@ -2119,10 +2159,11 @@ function drawPersonFigure(r,app,status,detailed,walking,walkPhase){
     ctx.fillStyle=eyeColor;
     ctx.beginPath(); ctx.ellipse(-headR*0.34,headCy+headR*0.05,headR*0.13,headR*0.16,0,0,Math.PI*2); ctx.fill();
     ctx.beginPath(); ctx.ellipse(headR*0.34,headCy+headR*0.05,headR*0.13,headR*0.16,0,0,Math.PI*2); ctx.fill();
+    if(working) drawWorkTool(job,r,workPhase);
   }
 }
-function drawNpcDot(cx,cy,r,n,walking,walkPhase,detailed){
-  const bob=walking?Math.abs(Math.sin(walkPhase||0))*r*0.12:0;
+function drawNpcDot(cx,cy,r,n,walking,walkPhase,detailed,working,workPhase){
+  const bob=walking?Math.abs(Math.sin(walkPhase||0))*r*0.12:(working?Math.abs(Math.sin((workPhase||0)*0.5))*r*0.05:0);
   if(n.frozen){
     ctx.beginPath(); ctx.arc(cx,cy,r*1.15,0,Math.PI*2);
     ctx.fillStyle='rgba(140,210,255,0.3)'; ctx.fill();
@@ -2130,7 +2171,7 @@ function drawNpcDot(cx,cy,r,n,walking,walkPhase,detailed){
   }
   ctx.save();
   ctx.translate(cx,cy-bob);
-  drawPersonFigure(r,n.appearance,n.status,detailed!==false,walking,walkPhase);
+  drawPersonFigure(r,n.appearance,n.status,detailed!==false,walking,walkPhase,working,workPhase,n.job);
   ctx.restore();
   ctx.beginPath(); ctx.ellipse(cx,cy+r*1.05,r*0.5,r*0.16,0,0,Math.PI*2);
   ctx.fillStyle='rgba(0,0,0,0.2)'; ctx.fill();
@@ -2138,7 +2179,7 @@ function drawNpcDot(cx,cy,r,n,walking,walkPhase,detailed){
   ctx.fillStyle=JOB_COLORS[n.job]||JOB_COLORS.unemployed; ctx.fill();
   ctx.strokeStyle='rgba(0,0,0,0.4)'; ctx.lineWidth=0.5; ctx.stroke();
   if(n.notable){
-    ctx.font=`${r*1.15}px ${EMOJI_FONT}`;
+    ctx.font=`${Math.min(r*1.15,26)}px ${EMOJI_FONT}`;
     ctx.textAlign='center'; ctx.textBaseline='middle';
     ctx.fillText('\u{1F451}',cx,cy-r*1.9);
   }
@@ -2157,16 +2198,19 @@ function randomPointNear(anchor,radius){
 }
 function stepTownMotion(m,home,workplace,awake,dt,now){
   if(m.state==='waiting'){
+    if(m.working) m.workPhase=(m.workPhase||0)+dt*5;
     if(now>=m.waitUntil){
-      const dest=awake?randomPointNear(workplace||home,workplace?20:44):home;
-      m.targetX=dest.x; m.targetY=dest.y; m.state='walking';
+      const goWork=awake&&!!workplace;
+      const dest=goWork?randomPointNear(workplace,16):(awake?randomPointNear(home,44):home);
+      m.targetX=dest.x; m.targetY=dest.y; m.state='walking'; m.nextWorking=goWork;
     }
     return;
   }
   const dx=m.targetX-m.x, dy=m.targetY-m.y, dist=Math.hypot(dx,dy);
   if(dist<2){
     m.state='waiting';
-    m.waitUntil=now+rand(awake?700:2200,awake?2600:5200);
+    m.working=!!m.nextWorking; m.workPhase=0;
+    m.waitUntil=now+rand(m.working?2600:700,m.working?6000:2600);
     return;
   }
   m.walkPhase=(m.walkPhase||0)+dt*9;
@@ -2242,7 +2286,7 @@ function drawTownView(town){
   ctx.strokeStyle='rgba(232,196,104,0.25)'; ctx.lineWidth=2;
   ctx.strokeRect(camOffsetX,camOffsetY,TOWN_VIEW_SIZE*camScale,TOWN_VIEW_SIZE*camScale);
 
-  const fontSize=Math.max(10,26*camScale);
+  const fontSize=Math.min(Math.max(10,26*camScale),30);
   ctx.textAlign='center'; ctx.textBaseline='middle';
   for(const bld of town.buildings){
     const bx=camOffsetX+bld.x*camScale, by=camOffsetY+bld.y*camScale;
@@ -2268,7 +2312,7 @@ function drawTownView(town){
     const sx=camOffsetX+m.x*camScale, sy=camOffsetY+m.y*camScale;
     if(sx<-40||sx>canvas.width+40||sy<-40||sy>canvas.height+40) continue;
     const detailed=!crowded||n.id===townFocusId||townCam.scale>1.6;
-    drawNpcDot(sx,sy,rBase,n,m.state==='walking',m.walkPhase,detailed);
+    drawNpcDot(sx,sy,rBase,n,m.state==='walking',m.walkPhase,detailed,m.state==='waiting'&&m.working,m.workPhase);
     townViewScreenPos[n.id]={x:sx,y:sy};
   }
 
