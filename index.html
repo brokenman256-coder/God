@@ -1293,7 +1293,7 @@ function commitCrime(n,town){
    convict out of the job pool and confines them to the jail in Town View
    until release. */
 function arrestAndTry(n,town){
-  town.totalArrests++;
+  town.totalArrests=(town.totalArrests||0)+1;
   n.arrestCount=(n.arrestCount||0)+1;
   const severity=rollCrimeSeverity(n);
   const def=CRIME_SEVERITIES[severity];
@@ -1305,7 +1305,7 @@ function arrestAndTry(n,town){
     if(Math.random()<0.2) log(`${n.name} stands trial for ${def.label} in ${town.name} and is acquitted.`,'crime');
     return;
   }
-  town.totalConvictions++;
+  town.totalConvictions=(town.totalConvictions||0)+1;
   n.convictionCount=(n.convictionCount||0)+1;
   n.karma-=4; n.crimeInclination=clamp(n.crimeInclination-25,0,100);
   const toPrison=Math.random()<def.prisonChance;
