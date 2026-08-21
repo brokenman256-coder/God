@@ -672,9 +672,11 @@ function createTown(x,y,name){
 /* ============================== TOWN VIEW: BUILDINGS & LAYOUT ============================== */
 const TOWN_VIEW_SIZE=640;
 const BUILDING_TYPES={
-  cave:{icon:'\u{1F573}\u{FE0F}'}, tent:{icon:'⛺'}, house:{icon:'🏠'}, farm:{icon:'🌾'}, temple:{icon:'🛕'},
-  shrine:{icon:'🕯️'}, well:{icon:'⛲'},
-  hall:{icon:'🏛️'}, hospital:{icon:'🏥'}, workshop:{icon:'🔨'}, mine:{icon:'⛏️'}, market:{icon:'🏪'}
+  cave:{icon:'\u{1F573}\u{FE0F}',name:'Cave Dwelling'}, tent:{icon:'⛺',name:'Tent'}, house:{icon:'🏠',name:'House'},
+  farm:{icon:'🌾',name:'Farm'}, temple:{icon:'🛕',name:'Temple'}, shrine:{icon:'🕯️',name:'Shrine'},
+  well:{icon:'⛲',name:'Well'}, tower:{icon:'🏢',name:'Tower',tall:true},
+  hall:{icon:'🏛️',name:'Town Hall'}, hospital:{icon:'🏥',name:'Hospital'}, workshop:{icon:'🔨',name:'Workshop'},
+  mine:{icon:'⛏️',name:'Mine'}, market:{icon:'🏪',name:'Market'}
 };
 const JOB_CAPACITY={farm:4,workshop:3,mine:3,market:2};
 function buildingTypeForJob(job){ return {farmer:'farm',miner:'mine',artisan:'workshop',merchant:'market'}[job]; }
@@ -717,7 +719,7 @@ function syncTownBuildings(town){
     farms=town.buildings.filter(b=>b.type==='farm');
   }
   if(!town.buildings.some(b=>b.type==='hall')) placeBuilding(town,'hall');
-  if(town.worship>=15 && !town.buildings.some(b=>b.type==='shrine')) placeBuilding(town,'shrine');
+  if(!town.buildings.some(b=>b.type==='shrine')) placeBuilding(town,'shrine');
   if((town.worship>=30||town.creed) && !town.buildings.some(b=>b.type==='temple')) placeBuilding(town,'temple');
   if(activeDisease(town) && !town.buildings.some(b=>b.type==='hospital')) placeBuilding(town,'hospital');
   if(town.population>=20){
@@ -743,6 +745,14 @@ function syncTownBuildings(town){
     while(mines.length<desiredMines && mines.length<5){
       placeBuilding(town,'mine');
       mines=town.buildings.filter(b=>b.type==='mine');
+    }
+  }
+  if(town.techStageIdx>=6){
+    const desiredTowers=Math.max(1,Math.ceil(town.population/80));
+    let towers=town.buildings.filter(b=>b.type==='tower');
+    while(towers.length<desiredTowers && towers.length<8){
+      placeBuilding(town,'tower');
+      towers=town.buildings.filter(b=>b.type==='tower');
     }
   }
 }
@@ -1521,11 +1531,11 @@ function denyPrayer(id){
   markDirty('prayers');
 }
 
-const MAX_TOWNS=25;
+const MAX_TOWNS=50;
 function maybeFoundColony(){
   if(G.towns.filter(t=>t.alive).length>=MAX_TOWNS) return;
   for(const town of livingTowns()){
-    if(town.population>160 && Math.random()<0.002){
+    if(town.population>110 && Math.random()<0.004){
       const site=findGoodTownSite();
       const nt=createTown(site.x,site.y,randomTownName());
       nt.techStageIdx=Math.max(0,town.techStageIdx-1);
@@ -2436,8 +2446,13 @@ function drawTownView(town){
   for(const bld of town.buildings){
     const bx=camOffsetX+bld.x*camScale, by=camOffsetY+bld.y*camScale;
     if(bx<-40||bx>canvas.width+40||by<-40||by>canvas.height+40) continue;
-    ctx.font=`${fontSize}px serif`;
-    ctx.fillText(BUILDING_TYPES[bld.type]?.icon||'🏠',bx,by);
+    const isTall=BUILDING_TYPES[bld.type]?.tall;
+    if(isTall){
+      ctx.fillStyle='rgba(0,0,0,0.22)';
+      ctx.beginPath(); ctx.ellipse(bx,by+fontSize*0.4,fontSize*0.32,fontSize*0.12,0,0,Math.PI*2); ctx.fill();
+    }
+    ctx.font=`${isTall?fontSize*1.5:fontSize}px serif`;
+    ctx.fillText(BUILDING_TYPES[bld.type]?.icon||'🏠',bx,by-(isTall?fontSize*0.35:0));
   }
 
   townViewScreenPos={};
@@ -2736,6 +2751,8 @@ function openTownModal(town){
       <div class="statRow"><span class="label">Inequality</span><b>${(town.gini||0).toFixed(2)} Gini</b></div>
     </div>
     <div class="mSub">Jobs: ${['farmer','miner','artisan','merchant','laborer'].map(j=>`${capitalize(j)} ${countByJob(town,j)}`).join(' · ')}</div>
+    <div class="mSub">Buildings: ${Object.entries((town.buildings||[]).reduce((acc,b)=>{acc[b.type]=(acc[b.type]||0)+1;return acc;},{}))
+      .map(([type,count])=>`${BUILDING_TYPES[type]?.icon||''} ${BUILDING_TYPES[type]?.name||capitalize(type)} ×${count}`).join(' · ') || 'None yet'}</div>
     ${town.creed?`<div class="mSub">Creed: <b style="color:var(--gold)">${esc(town.creed.name)}</b></div>`:''}
     ${warHtml?`<div class="mSub">At war with: ${esc(warHtml)}</div>`:''}
     ${diseaseHtml?`<div class="panelHead">Disease</div>${diseaseHtml}`:''}
