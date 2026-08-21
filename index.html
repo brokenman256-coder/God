@@ -1652,7 +1652,7 @@ const MAX_TOWNS=50;
 function maybeFoundColony(){
   if(G.towns.filter(t=>t.alive).length>=MAX_TOWNS) return;
   for(const town of livingTowns()){
-    if(town.population>110 && Math.random()<0.004){
+    if(town.population>400 && Math.random()<0.003){
       const site=findGoodTownSite();
       const nt=createTown(site.x,site.y,randomTownName());
       nt.techStageIdx=Math.max(0,town.techStageIdx-1);
@@ -2178,13 +2178,25 @@ function drawMap(){
   }
   for(const t of livingTowns()){
     const cx=offsetX+t.x*tileSize+tileSize/2, cy=offsetY+t.y*tileSize+tileSize/2;
-    const r=Math.max(tileSize*0.9,6);
+    /* Marker size actually reflects population -- a newborn 8-person village
+       and a thriving 900-person country should never look identical on the
+       world map. Scales from 1x up to ~2.5x as a country nears POP_CAP. */
+    const popScale=1+clamp(t.population/POP_CAP,0,1)*1.5;
+    const r=Math.max(tileSize*0.9,6)*popScale;
     ctx.beginPath(); ctx.arc(cx,cy,r*0.8,0,Math.PI*2);
     ctx.fillStyle= t.atWarWith.length? 'rgba(209,73,91,0.85)':'rgba(232,196,104,0.85)';
     ctx.fill();
+    if(t.population>=300){
+      ctx.strokeStyle='rgba(255,236,180,0.9)'; ctx.lineWidth=Math.max(1,tileSize*0.12); ctx.stroke();
+    }
     ctx.font=`${Math.max(10,r*1.6)}px serif`;
     ctx.textAlign='center'; ctx.textBaseline='middle';
     ctx.fillText(TECH_ICON[t.techStageIdx]||'🏕️',cx,cy);
+    if(tileSize>=16){
+      ctx.font=`${Math.max(9,tileSize*0.4)}px sans-serif`;
+      ctx.fillStyle='rgba(255,255,255,0.85)';
+      ctx.fillText(String(t.population),cx,cy+r*0.8+tileSize*0.35);
+    }
   }
   for(const d of G.demons){
     const town=townOf(d.townId); if(!town) continue;
