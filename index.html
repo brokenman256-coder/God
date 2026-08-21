@@ -102,6 +102,11 @@ aside#sidebar{width:360px;flex-shrink:0;display:flex;flex-direction:column;backg
 #consoleOutput .cInfo{color:var(--text-dim);}
 #consoleInputRow{display:flex;align-items:center;gap:6px;border-top:1px solid var(--border);
   padding:8px 10px;flex-shrink:0;background:var(--panel2);}
+#debugPanel{flex-shrink:0;padding:8px 10px;border-bottom:1px solid var(--border);background:var(--panel2);
+  display:grid;grid-template-columns:1fr 1fr;gap:3px 10px;font-family:'Courier New',monospace;font-size:10.5px;color:var(--text-dim);}
+#debugPanel b{color:var(--gold);}
+#debugPanel .dpHead{grid-column:1/-1;color:var(--text-dim);text-transform:uppercase;letter-spacing:1px;font-size:9.5px;margin-top:4px;}
+#debugPanel .dpHead:first-child{margin-top:0;}
 #consolePrompt{color:var(--gold);font-family:'Courier New',monospace;font-weight:700;}
 #consoleInput{flex:1;background:#05060c;border:1px solid var(--border);color:var(--text);
   font-family:'Courier New',monospace;font-size:12px;border-radius:6px;padding:7px 9px;}
@@ -110,6 +115,14 @@ aside#sidebar{width:360px;flex-shrink:0;display:flex;flex-direction:column;backg
 .panelHead{font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-dim);
   margin:12px 0 6px;}
 .panelHead:first-child{margin-top:0;}
+.searchBar input{width:100%;box-sizing:border-box;background:#05060c;border:1px solid var(--border);
+  color:var(--text);font-size:13px;border-radius:6px;padding:8px 10px;}
+.techLadder{display:flex;flex-wrap:wrap;gap:4px;margin:4px 0 8px;}
+.techStep{display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;
+  border-radius:6px;font-size:14px;border:1px solid var(--border);opacity:0.35;filter:grayscale(1);}
+.techStep.done{opacity:0.7;filter:grayscale(0.4);border-color:var(--gold-dim);}
+.techStep.current{opacity:1;filter:none;border-color:var(--gold);background:rgba(232,196,104,0.15);
+  box-shadow:0 0 0 1px var(--gold);}
 
 /* Power buttons */
 .powerBtn{width:100%;text-align:left;background:var(--panel2);border:1px solid var(--border);
@@ -299,6 +312,7 @@ footer#chronicle.collapsed{height:30px;}
         <section class="tabpanel" id="panel-specimen"></section>
         <section class="tabpanel" id="panel-towns"></section>
         <section class="tabpanel" id="panel-console">
+          <div id="debugPanel"></div>
           <div id="consoleOutput"><div class="cLine cInfo">Divine Console — direct, unrestricted access to your world. Type help() to begin.</div></div>
           <div id="consoleInputRow">
             <span id="consolePrompt">›</span>
@@ -419,6 +433,22 @@ const TECH_TO_ERA=[ERA.RISE,ERA.RISE,ERA.CLASSICAL,ERA.CLASSICAL,ERA.MEDIEVAL,ER
   ERA.INDUSTRIAL,ERA.MODERN,ERA.ATOMIC,ERA.INFO,ERA.FUTURE];
 const TECH_ICON=["🏕️","🛖","⛺","🏛️","🏰","🏯","🏭","🏙️","☢️","🌐","🚀"];
 const ATOMIC_IDX=8;
+/* What each stage actually unlocks mechanically, shown in the town modal's
+   Technology ladder instead of leaving tech as an invisible progress number. */
+const TECH_STAGE_UNLOCKS=[
+  "Cave dwellings, hunting and gathering.",
+  "Tents, workshops and markets -- organized trade begins.",
+  "Sturdier houses, mining and metal tools.",
+  "Formal government and law take root.",
+  "Feudal society, larger armies and fortifications.",
+  "Art, banking and scientific inquiry flourish.",
+  "Factories and towers -- mass production reshapes the skyline.",
+  "Modern medicine and mass communication lower mortality sharply.",
+  "Nuclear power -- and nuclear weapons -- become possible.",
+  "Computers and global instant communication.",
+  "The edge of the known -- speculative future technology."
+];
+function techNeed(stageIdx){ return 60+stageIdx*55; }
 
 /* Real-world-inspired demographic curves, indexed by TECH_STAGES idx.
    Life expectancy and birth rates track the historical demographic
@@ -653,6 +683,21 @@ function initNewGame(){
 }
 
 /* ============================== TOWN / NPC CREATION ============================== */
+/* A small, purely fictional culture per country -- language, cuisine, art
+   style, and a signature festival -- generated once at founding and free to
+   drift toward neighbors over time (see stepCultureDiffusion). */
+const LANGUAGE_PREFIX=["Kel","Sar","Dun","Vor","Mira","Iset","Bren","Tolo","Ashk","Ombri","Talu","Ferro","Norin","Quel"];
+const LANGUAGE_SUFFIX=["ic","ish","ari","ese","an","oth","ael","une","yr","ic"];
+const CUISINE_STYLES=["spiced root stews","fermented fish and rye","honeyed flatbreads","smoked river eel",
+  "charred grains and wild herbs","milk-cured cheeses","salted game and pickled greens","clay-oven breads"];
+const ART_STYLES=["geometric weaving","bone and antler carving","ochre murals","woven reed masks",
+  "hammered copper reliefs","dyed textile banners","painted pottery","stone cairns and glyphs"];
+const FESTIVAL_NAMES=["the Harvest Vigil","Longnight","the Ember Rite","the First Thaw Feast",
+  "the Gathering of Kin","the Silent Procession","the Sunreturn Dance","the Ancestor's Table"];
+function generateCulture(){
+  const lang=choice(LANGUAGE_PREFIX)+choice(LANGUAGE_SUFFIX);
+  return {language:capitalize(lang), cuisine:choice(CUISINE_STYLES), art:choice(ART_STYLES), festival:choice(FESTIVAL_NAMES)};
+}
 function createTown(x,y,name){
   const t={
     id:uid('t'), name, x, y, foundedTick:G.tickCount,
@@ -664,7 +709,8 @@ function createTown(x,y,name){
     diseases:[], atWarWith:[], tension:{},
     npcIds:[], notableIds:[], messiahId:null, alive:true, guardBoostUntil:0,
     government:{type:'chiefdom',leaderId:null,stability:60,since:G.tickCount},
-    secularism:0.03, buildings:[]
+    secularism:0.03, buildings:[], culture:generateCulture(),
+    totalArrests:0, totalConvictions:0
   };
   return t;
 }
@@ -674,7 +720,7 @@ const TOWN_VIEW_SIZE=640;
 const BUILDING_TYPES={
   cave:{icon:'\u{1F573}\u{FE0F}',name:'Cave Dwelling'}, tent:{icon:'⛺',name:'Tent'}, house:{icon:'🏠',name:'House'},
   farm:{icon:'🌾',name:'Farm'}, temple:{icon:'🛕',name:'Temple'}, shrine:{icon:'🕯️',name:'Shrine'},
-  well:{icon:'⛲',name:'Well'}, tower:{icon:'🏢',name:'Tower',tall:true},
+  well:{icon:'⛲',name:'Well'}, tower:{icon:'🏢',name:'Tower',tall:true}, jail:{icon:'🔒',name:'Jail'},
   hall:{icon:'🏛️',name:'Town Hall'}, hospital:{icon:'🏥',name:'Hospital'}, workshop:{icon:'🔨',name:'Workshop'},
   mine:{icon:'⛏️',name:'Mine'}, market:{icon:'🏪',name:'Market'}
 };
@@ -722,6 +768,7 @@ function syncTownBuildings(town){
   if(!town.buildings.some(b=>b.type==='shrine')) placeBuilding(town,'shrine');
   if((town.worship>=30||town.creed) && !town.buildings.some(b=>b.type==='temple')) placeBuilding(town,'temple');
   if(activeDisease(town) && !town.buildings.some(b=>b.type==='hospital')) placeBuilding(town,'hospital');
+  if(town.totalArrests>0 && !town.buildings.some(b=>b.type==='jail')) placeBuilding(town,'jail');
   if(town.population>=20){
     const desiredWells=Math.max(1,Math.ceil(town.population/60));
     let wells=town.buildings.filter(b=>b.type==='well');
@@ -773,7 +820,7 @@ function pickWorkplace(town,type){
   return opts.length?choice(opts).id:null;
 }
 function assignJobs(town){
-  const adults=town.npcIds.map(id=>G.npcs[id]).filter(n=>n&&n.alive&&(n.status==='adult'||n.status==='elder'));
+  const adults=town.npcIds.map(id=>G.npcs[id]).filter(n=>n&&n.alive&&(n.status==='adult'||n.status==='elder')&&!isImprisoned(n));
   const order=[
     ['farmer',jobSlotCount(town,'farm')],
     ['miner',jobSlotCount(town,'mine')],
@@ -967,7 +1014,27 @@ function simulateTick(){
   stepCaravans();
   decayOverlays();
   checkEraAdvance();
+  if(G.tickCount%20===0) stepCultureDiffusion();
   if(G.tickCount%15===0) markDirty('towns');
+}
+/* Neighboring, non-warring countries slowly rub off on each other -- a
+   cuisine, an art style, or a festival can spread from one to another,
+   independent of the (unchanging) language each keeps as its own identity. */
+function stepCultureDiffusion(){
+  const towns=livingTowns();
+  for(const town of towns){
+    if(!town.culture||Math.random()>0.02) continue;
+    const neighbors=towns.filter(o=>o.id!==town.id&&!town.atWarWith.includes(o.id)&&o.culture&&
+      Math.hypot(o.x-town.x,o.y-town.y)<=18);
+    if(!neighbors.length) continue;
+    const donor=choice(neighbors);
+    const trait=choice(['cuisine','art','festival']);
+    if(town.culture[trait]!==donor.culture[trait]){
+      town.culture[trait]=donor.culture[trait];
+      log(`${town.name} begins adopting ${donor.name}'s tradition of ${donor.culture[trait]}.`,'general',{silent:true});
+      markDirty('towns');
+    }
+  }
 }
 
 let FAST_FORWARDING=false;
@@ -1000,6 +1067,7 @@ function decayOverlays(){
 }
 
 function stepTown(town){
+  if(!town.culture) town.culture=generateCulture();
   syncTownBuildings(town);
   assignJobs(town);
 
@@ -1072,7 +1140,7 @@ function stepTown(town){
   const inventorBonus=hasInventor?1.6:1;
   const curiosityBonus=1+(townAvgCuriosity(town)/100)*0.5;
   town.techProgress+=town.population*0.0032*inventorBonus*curiosityBonus*(1-town.unrest/220);
-  const need=60+town.techStageIdx*55;
+  const need=techNeed(town.techStageIdx);
   if(town.techProgress>=need && town.techStageIdx<TECH_STAGES.length-1){
     town.techStageIdx++; town.techProgress=0;
     log(`${town.name} advances into the ${TECH_STAGES[town.techStageIdx]}.`,'tech');
@@ -1179,12 +1247,12 @@ function stepNpc(n,town,hungry){
   }
   n.health=clamp(n.health+(n.hunger>85?-0.6:0.15)+(n.disease?-0.5:0)+rand(-0.2,0.2),0,100);
 
-  if(n.status==='adult'||n.status==='elder'){
+  if((n.status==='adult'||n.status==='elder')&&!isImprisoned(n)){
     const wealthIncome={farmer:0.02,miner:0.03,artisan:0.05,merchant:0.08,laborer:0.015,unemployed:-0.02}[n.job]??0;
     n.wealth=clamp(n.wealth+wealthIncome*(1+n.talent/200)+(n.notable?0.05:0)+rand(-0.02,0.02),0,999);
   }
   if(n.status==='adult'){
-    updateCrime(n,town);
+    if(!isImprisoned(n)) updateCrime(n,town);
     updateRelationship(n,town);
     maybeBecomeNotable(n,town);
   }
@@ -1196,17 +1264,66 @@ function updateCrime(n,town){
   n.crimeInclination=clamp(n.crimeInclination+(n.hunger>70?0.3:-0.2)+(n.faith<30?0.1:-0.06)+(town.unrest>50?0.2:-0.1)+frustratedAmbition,0,100);
   if(Math.random()<n.crimeInclination/100*0.012) commitCrime(n,town);
 }
+const CRIME_SEVERITIES={
+  minor:{label:'petty theft',fine:[8,20],prisonDays:[8,18],prisonChance:0.35},
+  moderate:{label:'assault',fine:[20,45],prisonDays:[18,40],prisonChance:0.65},
+  serious:{label:'grand theft',fine:[45,90],prisonDays:[40,90],prisonChance:0.85}
+};
+function rollCrimeSeverity(n){
+  const heat=n.crimeInclination/100;
+  const r=Math.random();
+  if(r<0.55-heat*0.25) return 'minor';
+  if(r<0.88-heat*0.15) return 'moderate';
+  return 'serious';
+}
 function commitCrime(n,town){
   town.unrest=clamp(town.unrest+2,0,100);
   n.karma-=5;
   const caught=Math.random()*100<town.policeStrength;
-  if(caught){
-    n.karma-=2; n.health=clamp(n.health-10,0,100); n.crimeInclination=clamp(n.crimeInclination-22,0,100);
-    if(Math.random()<0.15) log(`${n.name} was caught by the guards of ${town.name}.`,'crime');
-  } else if(Math.random()<0.08){
-    log(`Crime stirs unrest in ${town.name}.`,'crime');
+  if(!caught){
+    if(Math.random()<0.08) log(`Crime stirs unrest in ${town.name}.`,'crime');
+    return;
   }
+  arrestAndTry(n,town);
 }
+/* A real arrest -> trial -> sentence pipeline instead of a probabilistic
+   catch-and-shrug: severity is rolled, a trial resolves guilty or acquitted,
+   and a guilty verdict carries a real consequence -- a fine paid into the
+   town's treasury, or actual prison time (n.prisonUntil) that pulls the
+   convict out of the job pool and confines them to the jail in Town View
+   until release. */
+function arrestAndTry(n,town){
+  town.totalArrests++;
+  n.arrestCount=(n.arrestCount||0)+1;
+  const severity=rollCrimeSeverity(n);
+  const def=CRIME_SEVERITIES[severity];
+  const gov=GOVERNMENT_TYPES[town.government.type];
+  const convictionChance=clamp(0.55+town.policeStrength/400-gov.corruption*0.15,0.25,0.95);
+  const convicted=Math.random()<convictionChance;
+  if(!convicted){
+    n.crimeInclination=clamp(n.crimeInclination-10,0,100);
+    if(Math.random()<0.2) log(`${n.name} stands trial for ${def.label} in ${town.name} and is acquitted.`,'crime');
+    return;
+  }
+  town.totalConvictions++;
+  n.convictionCount=(n.convictionCount||0)+1;
+  n.karma-=4; n.crimeInclination=clamp(n.crimeInclination-25,0,100);
+  const toPrison=Math.random()<def.prisonChance;
+  if(toPrison){
+    const days=irand(def.prisonDays[0],def.prisonDays[1]);
+    n.prisonUntil=G.tickCount+days;
+    log(`${n.name} is convicted of ${def.label} in ${town.name} and sentenced to ${days} days in jail.`,'crime');
+  } else {
+    const fine=irand(def.fine[0],def.fine[1]);
+    const paid=Math.min(n.wealth,fine);
+    n.wealth=clamp(n.wealth-paid,0,999);
+    town.gold=clamp(town.gold+paid,0,999999);
+    n.health=clamp(n.health-6,0,100);
+    log(`${n.name} is convicted of ${def.label} in ${town.name} and fined ${paid} gold.`,'crime');
+  }
+  markDirty('towns');
+}
+function isImprisoned(n){ return n.prisonUntil && n.prisonUntil>G.tickCount; }
 
 function findEligiblePartner(n,town){
   const cands=town.npcIds.filter(id=>{
@@ -2237,7 +2354,7 @@ function drawPersonFigure(r,app,status,detailed,walking,walkPhase,working,workPh
     if(working) drawWorkTool(job,r,workPhase);
   }
 }
-function drawNpcDot(cx,cy,r,n,walking,walkPhase,detailed,working,workPhase){
+function drawNpcDot(cx,cy,r,n,walking,walkPhase,detailed,working,workPhase,jailed){
   const bob=walking?Math.abs(Math.sin(walkPhase||0))*r*0.12:(working?Math.abs(Math.sin((workPhase||0)*0.5))*r*0.05:0);
   if(n.frozen){
     ctx.beginPath(); ctx.arc(cx,cy,r*1.15,0,Math.PI*2);
@@ -2247,6 +2364,10 @@ function drawNpcDot(cx,cy,r,n,walking,walkPhase,detailed,working,workPhase){
   ctx.save();
   ctx.translate(cx,cy-bob);
   drawPersonFigure(r,n.appearance,n.status,detailed!==false,walking,walkPhase,working,workPhase,n.job);
+  if(jailed){
+    ctx.strokeStyle='rgba(20,20,25,0.55)'; ctx.lineWidth=Math.max(1,r*0.09);
+    for(const dx of [-0.4,0,0.4]){ ctx.beginPath(); ctx.moveTo(dx*r,-r*1.3); ctx.lineTo(dx*r,r*0.9); ctx.stroke(); }
+  }
   ctx.restore();
   ctx.beginPath(); ctx.ellipse(cx,cy+r*1.05,r*0.5,r*0.16,0,0,Math.PI*2);
   ctx.fillStyle='rgba(0,0,0,0.2)'; ctx.fill();
@@ -2468,20 +2589,22 @@ function drawTownView(town){
   }
 
   for(const n of npcs){
+    const jailed=isImprisoned(n);
+    const jail=jailed?town.buildings.find(b=>b.type==='jail'):null;
     let home=town.buildings.find(bd=>bd.id===n.homeId);
     if(!home){ ensureHome(n,town); home=town.buildings.find(bd=>bd.id===n.homeId); }
-    const hx=home?home.x:TOWN_VIEW_SIZE/2, hy=home?home.y:TOWN_VIEW_SIZE/2;
+    const hx=jail?jail.x:(home?home.x:TOWN_VIEW_SIZE/2), hy=jail?jail.y:(home?home.y:TOWN_VIEW_SIZE/2);
     let m=townMotionState[n.id];
     if(!m){ m={x:hx,y:hy,targetX:hx,targetY:hy,state:'waiting',waitUntil:0,walkPhase:0}; townMotionState[n.id]=m; }
     if(!n.frozen){
-      const hasJob=n.job&&n.job!=='laborer'&&n.job!=='unemployed';
+      const hasJob=!jailed&&n.job&&n.job!=='laborer'&&n.job!=='unemployed';
       const workplace=hasJob?town.buildings.find(bd=>bd.id===n.workplaceId):null;
-      stepTownMotion(m,{x:hx,y:hy},workplace,awake,dt,now);
+      stepTownMotion(m,{x:hx,y:hy},workplace,jailed?false:awake,dt,now);
     }
     const sx=camOffsetX+m.x*camScale, sy=camOffsetY+m.y*camScale;
     if(sx<-40||sx>canvas.width+40||sy<-40||sy>canvas.height+40) continue;
     const detailed=!crowded||n.id===townFocusId||townCam.scale>1.6;
-    drawNpcDot(sx,sy,rBase,n,m.state==='walking',m.walkPhase,detailed,m.state==='waiting'&&m.working,m.workPhase);
+    drawNpcDot(sx,sy,rBase,n,m.state==='walking',m.walkPhase,detailed,m.state==='waiting'&&m.working,m.workPhase,jailed);
     townViewScreenPos[n.id]={x:sx,y:sy};
   }
 
@@ -2687,11 +2810,47 @@ function renderSpecimen(){
 }
 
 /* ============================== UI: TOWNS PANEL ============================== */
+let citizenSearchQuery='';
+function searchCitizens(query){
+  const q=query.trim().toLowerCase();
+  if(!q) return [];
+  const matches=[];
+  for(const t of livingTowns()){
+    for(const id of t.npcIds){
+      const n=G.npcs[id];
+      if(n && n.alive && n.name.toLowerCase().includes(q)){ matches.push({n,t}); if(matches.length>=40) return matches; }
+    }
+  }
+  return matches;
+}
 function renderTowns(){
   const el=document.getElementById('panel-towns');
+  /* The search input lives in its own container, created once and never
+     rebuilt afterward -- otherwise every background event (a birth, a
+     death, a tech advance) calling markDirty('towns') would blow away
+     the input's focus and cursor position mid-keystroke. Only the results
+     area below it gets refreshed on every render. */
+  if(!el.querySelector('#citizenSearchInput')){
+    el.innerHTML=`<div class="searchBar"><input id="citizenSearchInput" type="text" placeholder="🔍 Search citizens by name..." value="${esc(citizenSearchQuery)}"/></div><div id="townsListArea"></div>`;
+  }
+  renderTownsListArea();
+}
+function renderTownsListArea(){
+  const listEl=document.getElementById('townsListArea');
+  if(!listEl) return;
   const towns=livingTowns();
-  if(!towns.length){ el.innerHTML='<div class="emptyState">No peoples walk the world yet.</div>'; return; }
-  el.innerHTML=`<div class="panelHead">Peoples of the World</div>`+towns.map(t=>{
+  let searchHtml='';
+  if(citizenSearchQuery.trim()){
+    const matches=searchCitizens(citizenSearchQuery);
+    searchHtml=`<div class="panelHead">Search Results (${matches.length})</div><div class="npcList">`+
+      (matches.length?matches.map(({n,t})=>`<div class="npcRow" data-npc="${n.id}">
+        <span class="miniPortrait">${portraitSVG(n.appearance,22)}</span>
+        <span class="nm">${n.custom?'✦ ':''}${esc(n.name)}${n.age<18?' ('+Math.floor(n.age)+')':''}</span>
+        <span class="role">${esc(t.name)}${n.notable?' • '+esc(n.title):''}</span></div>`).join(''):
+        '<div class="emptyState">No citizen found by that name.</div>')+`</div>`;
+  }
+  if(!towns.length){ listEl.innerHTML=searchHtml+'<div class="emptyState">No peoples walk the world yet.</div>'; return; }
+  listEl.innerHTML=searchHtml+`<div class="panelHead">Peoples of the World</div>`+towns.map(t=>{
     const leader=t.government.leaderId?G.npcs[t.government.leaderId]:null;
     return `
     <div class="townCard" data-town="${t.id}">
@@ -2710,6 +2869,37 @@ function renderTowns(){
       ${t.creed?`<div class="tStats"><span>☩ ${esc(t.creed.name)}</span></div>`:''}
     </div>`;
   }).join('');
+}
+
+/* Debug/admin readout -- live world stats for the Console tab. Skipped
+   whenever the console tab isn't the visible one (offsetParent is null
+   for a display:none ancestor), so it costs nothing while hidden. */
+function renderDebugPanel(){
+  const dp=document.getElementById('debugPanel');
+  if(!dp||!dp.offsetParent) return;
+  const towns=livingTowns();
+  const totalPop=towns.reduce((s,t)=>s+t.population,0);
+  const aliveTracked=towns.reduce((s,t)=>s+t.npcIds.length,0);
+  let ageSum=0,ageN=0;
+  for(const t of towns) for(const id of t.npcIds){ const p=G.npcs[id]; if(p&&p.alive){ ageSum+=p.age; ageN++; } }
+  const avgAge=ageN?(ageSum/ageN).toFixed(1):'0';
+  dp.innerHTML=`
+    <div class="dpHead">World</div>
+    <span>Day</span><b>${G.tickCount}</b>
+    <span>Era</span><b>${esc(ERAS[G.era]||'?')}</b>
+    <span>Speed</span><b>${G.paused?'Paused':(G.speedMult+'x')}</b>
+    <span>Favor</span><b>${Math.round(G.favor)}</b>
+    <div class="dpHead">Population</div>
+    <span>Countries</span><b>${towns.length}/${MAX_TOWNS}</b>
+    <span>Total pop</span><b>${totalPop}</b>
+    <span>Tracked NPCs</span><b>${aliveTracked}</b>
+    <span>Avg tracked age</span><b>${avgAge}</b>
+    <div class="dpHead">Lifetime</div>
+    <span>Total births</span><b>${G.stats.totalBirths}</b>
+    <span>Total deaths</span><b>${G.stats.totalDeaths}</b>
+    <span>Prayers answered</span><b>${G.stats.totalPrayersAnswered}</b>
+    <span>Prayers denied</span><b>${G.stats.totalPrayersDenied}</b>
+  `;
 }
 
 /* ============================== MODALS ============================== */
@@ -2753,6 +2943,22 @@ function openTownModal(town){
     <div class="mSub">Jobs: ${['farmer','miner','artisan','merchant','laborer'].map(j=>`${capitalize(j)} ${countByJob(town,j)}`).join(' · ')}</div>
     <div class="mSub">Buildings: ${Object.entries((town.buildings||[]).reduce((acc,b)=>{acc[b.type]=(acc[b.type]||0)+1;return acc;},{}))
       .map(([type,count])=>`${BUILDING_TYPES[type]?.icon||''} ${BUILDING_TYPES[type]?.name||capitalize(type)} ×${count}`).join(' · ') || 'None yet'}</div>
+    <div class="mSub">Justice: ${town.totalArrests||0} arrests · ${town.totalConvictions||0} convictions · ${town.npcIds.filter(id=>isImprisoned(G.npcs[id])).length} currently imprisoned</div>
+    <div class="panelHead">Technology</div>
+    <div class="techLadder">${TECH_STAGES.map((nm,i)=>
+      `<span class="techStep ${i===town.techStageIdx?'current':(i<town.techStageIdx?'done':'locked')}" title="${esc(nm)}">${TECH_ICON[i]}</span>`).join('')}</div>
+    <div class="mSub"><b style="color:var(--gold)">${esc(TECH_STAGES[town.techStageIdx])}</b> — ${esc(TECH_STAGE_UNLOCKS[town.techStageIdx])}</div>
+    ${town.techStageIdx<TECH_STAGES.length-1?
+      `<div class="bar"><i style="width:${clamp(town.techProgress/techNeed(town.techStageIdx)*100,0,100)}%;background:var(--gold)"></i></div>
+       <div class="mSub">Progress to ${esc(TECH_STAGES[town.techStageIdx+1])}: ${Math.floor(town.techProgress)}/${techNeed(town.techStageIdx)}</div>`:
+      `<div class="mSub">The final stage of technology has been reached.</div>`}
+    ${town.culture?`<div class="panelHead">Culture</div>
+    <div class="modalGrid">
+      <div class="statRow"><span class="label">Language</span><b>${esc(town.culture.language)}</b></div>
+      <div class="statRow"><span class="label">Cuisine</span><b>${esc(town.culture.cuisine)}</b></div>
+      <div class="statRow"><span class="label">Art</span><b>${esc(town.culture.art)}</b></div>
+      <div class="statRow"><span class="label">Festival</span><b>${esc(town.culture.festival)}</b></div>
+    </div>`:''}
     ${town.creed?`<div class="mSub">Creed: <b style="color:var(--gold)">${esc(town.creed.name)}</b></div>`:''}
     ${warHtml?`<div class="mSub">At war with: ${esc(warHtml)}</div>`:''}
     ${diseaseHtml?`<div class="panelHead">Disease</div>${diseaseHtml}`:''}
@@ -2785,6 +2991,8 @@ function openNpcModal(npc){
       </div>
     </div>
     ${npc.frozen?`<div class="pendingBanner"><span>❄️ Frozen outside the flow of time</span></div>`:''}
+    ${isImprisoned(npc)?`<div class="pendingBanner"><span>🔒 Imprisoned — released on Day ${npc.prisonUntil}</span></div>`:''}
+    ${(npc.arrestCount||0)>0?`<div class="mSub">Record: ${npc.arrestCount} arrest${npc.arrestCount===1?'':'s'}, ${npc.convictionCount||0} conviction${(npc.convictionCount||0)===1?'':'s'}</div>`:''}
     ${pendingApplies?`<div class="pendingBanner"><span>Apply ${esc(pending.def.name)} to ${esc(npc.name)}?</span><button data-applynpc="${npc.id}">Apply</button></div>`:''}
     <div class="statRow"><span class="label">Hunger</span><div class="bar"><i style="width:${npc.hunger}%;background:var(--warn)"></i></div></div>
     <div class="statRow"><span class="label">Mood</span><div class="bar"><i style="width:${npc.mood}%;background:var(--good)"></i></div></div>
@@ -3039,8 +3247,12 @@ function initUI(){
     const d=e.target.closest('[data-deny]'); if(d){ denyPrayer(d.dataset.deny); return; }
   });
   document.getElementById('panel-towns').addEventListener('click',(e)=>{
+    const npcRow=e.target.closest('[data-npc]'); if(npcRow){ const n=G.npcs[npcRow.dataset.npc]; if(n) openNpcModal(n); return; }
     const c=e.target.closest('[data-town]'); if(!c) return;
     const town=townOf(c.dataset.town); if(town) openTownModal(town);
+  });
+  document.getElementById('panel-towns').addEventListener('input',(e)=>{
+    if(e.target.id==='citizenSearchInput'){ citizenSearchQuery=e.target.value; renderTownsListArea(); }
   });
 
   document.getElementById('modalRoot').addEventListener('click',(e)=>{
@@ -3182,6 +3394,7 @@ function doOfflineCatchup(lastReal){
 
 /* ============================== GAME LOOP ============================== */
 let lastFrame=0, tickAccum=0;
+let lastDebugRender=0;
 function gameLoop(ts){
   const dt=Math.min(ts-lastFrame,1000); lastFrame=ts;
   if(!G.paused){
@@ -3192,6 +3405,7 @@ function gameLoop(ts){
   }
   renderCanvas();
   renderDirty();
+  if(ts-lastDebugRender>500){ renderDebugPanel(); lastDebugRender=ts; }
   requestAnimationFrame(gameLoop);
 }
 
