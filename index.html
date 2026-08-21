@@ -964,12 +964,14 @@ function randomTownName(){
 }
 
 function spawnFirstHumans(){
+  const wasExtinct=G.towns.length>0;
   const site=findGoodTownSite();
   const town=createTown(site.x,site.y,randomTownName());
   town.population=8;
   for(let i=0;i<8;i++) addNpcToTown(town,makeNpc({age:16+Math.random()*22,townId:town.id,techStageIdx:town.techStageIdx}));
   G.towns.push(town);
-  log(`At ${town.name}, the first humans awaken and gaze upon the world you made.`,'milestone');
+  log(wasExtinct?`Though the old world fell silent, a new people rises at ${town.name} to take its place.`
+    :`At ${town.name}, the first humans awaken and gaze upon the world you made.`,'milestone');
   markDirty('towns');
 }
 
@@ -1004,6 +1006,13 @@ function markDirty(k){G.dirty[k]=true;}
 function simulateTick(){
   G.tickCount++;
   if(G.evolutionStage>=1 && G.evolutionStage<6) stepEvolutionPassive();
+  /* If every settlement has died out, humanity gets reseeded rather than
+     leaving the world permanently stuck with zero living towns forever --
+     previously this recovery only ran during fast-forward/offline catch-up,
+     so a civilization that went extinct during normal real-time play could
+     never advance again (no towns means no tech, so the era could never
+     move either). */
+  if(G.evolutionStage>=6 && !G.towns.some(t=>t.alive)) spawnFirstHumans();
   for(const town of G.towns) if(town.alive) stepTown(town);
   stepDemons();
   maybeGeneratePrayer();
@@ -1743,7 +1752,7 @@ function autoAdvanceIfStuck(allowGenesis){
   } else if(G.evolutionStage>=1 && G.evolutionStage<6 && G.evolutionPoints>=100){
     const opts=MUTATION_CHOICES[G.evolutionStage];
     if(opts) applyMutation(choice(opts));
-  } else if(G.evolutionStage>=6 && !G.towns.length){
+  } else if(G.evolutionStage>=6 && !G.towns.some(t=>t.alive)){
     spawnFirstHumans();
   }
 }
