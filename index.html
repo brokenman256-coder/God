@@ -1139,7 +1139,13 @@ function stepTown(town){
   const hasInventor=town.notableIds.some(id=>G.npcs[id]?.role==='inventor'&&G.npcs[id]?.alive);
   const inventorBonus=hasInventor?1.6:1;
   const curiosityBonus=1+(townAvgCuriosity(town)/100)*0.5;
-  town.techProgress+=town.population*0.0032*inventorBonus*curiosityBonus*(1-town.unrest/220);
+  /* Fast-forwarding to a chosen era is a deliberate request to skip ahead,
+     not to watch realistic centuries-long growth tick by tick -- without
+     this, a small early population could never accumulate enough tech
+     progress to reach later eras before the fast-forward's own safety cap
+     on iterations kicked in (see fastForwardToEra). */
+  const ffBonus=FAST_FORWARDING?4:1;
+  town.techProgress+=Math.max(town.population,15)*0.0032*inventorBonus*curiosityBonus*(1-town.unrest/220)*ffBonus;
   const need=techNeed(town.techStageIdx);
   if(town.techProgress>=need && town.techStageIdx<TECH_STAGES.length-1){
     town.techStageIdx++; town.techProgress=0;
@@ -3016,6 +3022,7 @@ function openNpcModal(npc){
     ${npc.grantedPowers&&npc.grantedPowers.length?`<div class="mSub">Channels: ${npc.grantedPowers.map(id=>`<span class="traitTag">${esc(POWER_BY_ID[id]?.name||id)}</span>`).join('')}</div>`:''}
     <div class="mSub">Relationship: ${esc(npc.relationship.status)}${spouse?' to '+esc(spouse.name):''} • Children: ${npc.children.length}</div>
     <div class="actionRow">
+      ${town?`<button data-enter-town="${town.id}">🔎 Enter ${esc(town.name)}</button>`:''}
       <button data-npcact="bless" data-npc="${npc.id}">😇 Bless (6)</button>
       <button data-npcact="curse" data-npc="${npc.id}">😈 Curse (6)</button>
       <button data-npcact="giftTalent" data-npc="${npc.id}" ${(npc.status==='infant'||npc.status==='child')&&!npc.giftedAtBirth?'':'disabled'}>🎁 Gift Talent (12)</button>
@@ -3362,13 +3369,18 @@ function fastForwardToEra(targetEra){
   if(G._mutationModalOpen){ closeModal(); G._mutationModalOpen=false; }
   FAST_FORWARDING=true;
   let iterations=0;
-  while(G.era<targetEra && iterations<20000){
+  while(G.era<targetEra && iterations<60000){
     simulateTick();
     autoAdvanceIfStuck(true);
     iterations++;
   }
   FAST_FORWARDING=false;
-  log(`Time leaps forward to the ${ERAS[G.era]}.`,'time');
+  if(G.era>=targetEra){
+    log(`Time leaps forward to the ${ERAS[G.era]}.`,'time');
+  } else {
+    log(`Time surges forward -- the world reaches only the ${ERAS[G.era]} before settling; give it more time to reach ${ERAS[targetEra]}.`,'time');
+    toast(`Only reached ${ERAS[G.era]} -- keep playing or leap again to push further.`);
+  }
   renderAll();
 }
 const SAVE_KEY='demiurge_save_v2';
