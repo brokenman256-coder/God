@@ -587,6 +587,40 @@ function doGenesisLand(g){
     if(lat>0.86){ g.tiles[i]=TILE.ICE; continue; }
     g.tiles[i]= e>mountainLevel ? TILE.MOUNTAIN : TILE.LAND;
   }
+  doGenesisRivers(g);
+}
+/* Rivers: a steepest-descent walk from each of a handful of mountain tiles
+   down to the sea (or wherever the elevation bottoms out), turning every
+   tile it crosses into water. Reuses TILE.WATER rather than a new tile type
+   -- a winding one-tile ribbon through land already reads as a river, and it
+   picks up all of water's existing rendering and near-water siting logic
+   for free. */
+function doGenesisRivers(g){
+  const mountains=[];
+  for(let i=0;i<g.tiles.length;i++){ if(g.tiles[i]===TILE.MOUNTAIN) mountains.push(i); }
+  if(!mountains.length) return;
+  const rng=mulberry32(((g.w*7919+g.h*104729)^0x2545F4914F6CDD1D)>>>0);
+  const riverCount=clamp(Math.round((g.w*g.h)/900),2,6);
+  for(let r=0;r<riverCount;r++){
+    let cur=mountains[Math.floor(rng()*mountains.length)];
+    const visited=new Set();
+    for(let step=0;step<g.w+g.h;step++){
+      if(visited.has(cur)||g.tiles[cur]===TILE.WATER) break;
+      visited.add(cur);
+      if(g.tiles[cur]!==TILE.MOUNTAIN) g.tiles[cur]=TILE.WATER;
+      const cx=cur%g.w, cy=Math.floor(cur/g.w);
+      let best=-1, bestElev=g.elev[cur];
+      for(let dy=-1;dy<=1;dy++)for(let dx=-1;dx<=1;dx++){
+        if(!dx&&!dy) continue;
+        const nx=cx+dx, ny=cy+dy;
+        if(!inBounds(g,nx,ny)) continue;
+        const ni=idx(g,nx,ny);
+        if(g.elev[ni]<bestElev){ bestElev=g.elev[ni]; best=ni; }
+      }
+      if(best===-1) break;
+      cur=best;
+    }
+  }
 }
 function doGenesisVegetation(g){
   for(let y=0;y<g.h;y++)for(let x=0;x<g.w;x++){
@@ -638,7 +672,8 @@ function createTown(x,y,name){
 /* ============================== TOWN VIEW: BUILDINGS & LAYOUT ============================== */
 const TOWN_VIEW_SIZE=640;
 const BUILDING_TYPES={
-  tent:{icon:'⛺'}, house:{icon:'🏠'}, farm:{icon:'🌾'}, temple:{icon:'🛕'},
+  cave:{icon:'\u{1F573}\u{FE0F}'}, tent:{icon:'⛺'}, house:{icon:'🏠'}, farm:{icon:'🌾'}, temple:{icon:'🛕'},
+  shrine:{icon:'🕯️'}, well:{icon:'⛲'},
   hall:{icon:'🏛️'}, hospital:{icon:'🏥'}, workshop:{icon:'🔨'}, mine:{icon:'⛏️'}, market:{icon:'🏪'}
 };
 const JOB_CAPACITY={farm:4,workshop:3,mine:3,market:2};
@@ -668,12 +703,12 @@ function placeBuilding(town,type){
 }
 function syncTownBuildings(town){
   town.buildings=town.buildings||[];
-  const houseType=town.techStageIdx<=1?'tent':'house';
+  const houseType=town.techStageIdx===0?'cave':(town.techStageIdx===1?'tent':'house');
   const desiredHouses=Math.max(1,Math.ceil(town.population/5));
-  let houses=town.buildings.filter(b=>b.type==='house'||b.type==='tent');
+  let houses=town.buildings.filter(b=>b.type==='house'||b.type==='tent'||b.type==='cave');
   while(houses.length<desiredHouses && town.buildings.length<60){
     placeBuilding(town,houseType);
-    houses=town.buildings.filter(b=>b.type==='house'||b.type==='tent');
+    houses=town.buildings.filter(b=>b.type==='house'||b.type==='tent'||b.type==='cave');
   }
   const desiredFarms=Math.max(1,Math.ceil(town.population/15));
   let farms=town.buildings.filter(b=>b.type==='farm');
@@ -682,8 +717,17 @@ function syncTownBuildings(town){
     farms=town.buildings.filter(b=>b.type==='farm');
   }
   if(!town.buildings.some(b=>b.type==='hall')) placeBuilding(town,'hall');
+  if(town.worship>=15 && !town.buildings.some(b=>b.type==='shrine')) placeBuilding(town,'shrine');
   if((town.worship>=30||town.creed) && !town.buildings.some(b=>b.type==='temple')) placeBuilding(town,'temple');
   if(activeDisease(town) && !town.buildings.some(b=>b.type==='hospital')) placeBuilding(town,'hospital');
+  if(town.population>=20){
+    const desiredWells=Math.max(1,Math.ceil(town.population/60));
+    let wells=town.buildings.filter(b=>b.type==='well');
+    while(wells.length<desiredWells && wells.length<4){
+      placeBuilding(town,'well');
+      wells=town.buildings.filter(b=>b.type==='well');
+    }
+  }
   if(town.techStageIdx>=1){
     const desiredWorkshops=Math.max(1,Math.ceil(town.population/20));
     let workshops=town.buildings.filter(b=>b.type==='workshop');
@@ -703,7 +747,7 @@ function syncTownBuildings(town){
   }
 }
 function ensureHome(npc,town){
-  const houses=town.buildings.filter(b=>b.type==='house'||b.type==='tent');
+  const houses=town.buildings.filter(b=>b.type==='house'||b.type==='tent'||b.type==='cave');
   if(houses.length) npc.homeId=choice(houses).id;
 }
 
@@ -1081,9 +1125,10 @@ function attemptRevolution(town){
 
 function weatherFoodMult(town){
   const g=G.grid; const o=g.overlay[idx(g,town.x,town.y)];
+  const hasWell=town.buildings&&town.buildings.some(b=>b.type==='well');
   if(!o) return 1;
   if(o.type==='rain') return 1.35;
-  if(o.type==='drought') return 0.55;
+  if(o.type==='drought') return hasWell?0.78:0.55;
   if(o.type==='flood') return 0.4;
   if(o.type==='radiation') return 0.2;
   return 1;
@@ -1337,18 +1382,38 @@ function endWar(a,b,reason){
   markDirty('towns');
 }
 
+/* Original, fictional devotional lines -- not drawn from or imitating any
+   real-world scripture or prayer -- that devout towns recite to the player-
+   god, in keeping with the game's existing invented-creed system (Order of
+   Rain, Cult of Ash, etc. are all fictional too). */
+const CHANTS=[
+  "Maker of sky, maker of stone, we are the seeds your hand has sown.",
+  "One above all, hear our small voice -- in your shaping we rejoice.",
+  "By your breath the rivers run, by your will is set the sun.",
+  "We are clay, you are the hand; guide us gently through this land.",
+  "Sky-shaper, sky-shaper, watch us grow, as you will it, so we go.",
+  "No storm nor stone but bends to thee -- as you shape us, so shall we be.",
+  "First light, last light, all light thine; keep our small flame close to shine.",
+  "We plant, we build, we live, we die -- always beneath your watching sky.",
+  "Maker above, maker unseen, we chant your name where none has been.",
+  "As the seed trusts the rain to fall, we trust the hand behind it all."
+];
 function stepWorship(town){
   const npcs=town.npcIds.map(id=>G.npcs[id]).filter(n=>n&&n.alive);
   const believers=npcs.filter(n=>n.believer);
   town.secularism=npcs.length?1-(believers.length/npcs.length):town.secularism;
   const avgFaith=believers.length?believers.reduce((s,n)=>s+n.faith,0)/believers.length:0;
   const messiahBonus=town.messiahId?12:0;
-  const target=avgFaith*(1-town.secularism*0.35)+messiahBonus;
+  const shrineBonus=town.buildings&&town.buildings.some(b=>b.type==='shrine')?1.5:0;
+  const target=avgFaith*(1-town.secularism*0.35)+messiahBonus+shrineBonus;
   town.worship=clamp(lerp(town.worship,target,0.03),0,100);
   if(town.worship>=50 && !town.creed){
     town.creed=generateCreed(town);
     log(`The people of ${town.name} have founded ${town.creed.name}.`,'milestone');
     markDirty('towns');
+  }
+  if(town.worship>=40 && Math.random()<0.0015){
+    log(`The faithful of ${town.name} chant: "${choice(CHANTS)}"`,'general',{silent:true});
   }
 }
 function generateCreed(town){
@@ -2218,6 +2283,86 @@ function stepTownMotion(m,home,workplace,awake,dt,now){
   if(step>=dist){ m.x=m.targetX; m.y=m.targetY; }
   else { m.x+=dx/dist*step; m.y+=dy/dist*step; }
 }
+/* A few purely decorative animals per town -- farm animals grazing near
+   farms, deer near forested/mountain sites -- using the same lightweight
+   wander-and-wait motion pattern as citizens, but simpler (no jobs/homes). */
+const TOWN_ANIMAL_KINDS={
+  goat:{body:'#c9b98a',accent:'#8a7a52',legs:'#8a7a52'},
+  deer:{body:'#8a6a45',accent:'#5a4028',legs:'#5a4028'}
+};
+let townAnimalState={_townId:null,list:[]};
+function ensureTownAnimals(town){
+  if(townAnimalState._townId===town.id) return townAnimalState.list;
+  const list=[];
+  const farms=town.buildings.filter(b=>b.type==='farm');
+  const farmAnimalCount=Math.min(6,farms.length*2);
+  for(let i=0;i<farmAnimalCount;i++){
+    const anchor=farms.length?choice(farms):{x:TOWN_VIEW_SIZE/2,y:TOWN_VIEW_SIZE/2};
+    list.push({kind:Math.random()<0.5?'goat':'chicken',anchor:{x:anchor.x,y:anchor.y},
+      x:anchor.x,y:anchor.y,targetX:anchor.x,targetY:anchor.y,state:'waiting',waitUntil:0,walkPhase:0});
+  }
+  const g=G.grid;
+  const baseTile=g?g.tiles[idx(g,town.x,town.y)]:TILE.LAND;
+  if(baseTile===TILE.FOREST||baseTile===TILE.MOUNTAIN){
+    for(let i=0;i<2;i++){
+      const ax=rand(60,TOWN_VIEW_SIZE-60), ay=rand(60,TOWN_VIEW_SIZE-60);
+      list.push({kind:'deer',anchor:{x:ax,y:ay},x:ax,y:ay,targetX:ax,targetY:ay,state:'waiting',waitUntil:0,walkPhase:0});
+    }
+  }
+  townAnimalState={_townId:town.id,list};
+  return list;
+}
+function stepAnimalMotion(a,dt,now){
+  const speed=a.kind==='deer'?26:14;
+  const radius=a.kind==='deer'?70:26;
+  if(a.state==='waiting'){
+    if(now>=a.waitUntil){
+      const dest=randomPointNear(a.anchor,radius);
+      a.targetX=dest.x; a.targetY=dest.y; a.state='walking';
+    }
+    return;
+  }
+  const dx=a.targetX-a.x, dy=a.targetY-a.y, dist=Math.hypot(dx,dy);
+  if(dist<2){ a.state='waiting'; a.waitUntil=now+rand(1500,4500); return; }
+  a.walkPhase=(a.walkPhase||0)+dt*7;
+  const step=speed*dt;
+  if(step>=dist){ a.x=a.targetX; a.y=a.targetY; } else { a.x+=dx/dist*step; a.y+=dy/dist*step; }
+}
+function drawAnimal(cx,cy,r,kind,walking,walkPhase){
+  const bob=walking?Math.abs(Math.sin(walkPhase||0))*r*0.15:0;
+  const legSwing=walking?Math.sin(walkPhase||0)*r*0.25:0;
+  ctx.save();
+  ctx.translate(cx,cy-bob);
+  if(kind==='chicken'){
+    ctx.strokeStyle='#c9622a'; ctx.lineWidth=Math.max(1,r*0.12); ctx.lineCap='round';
+    ctx.beginPath();
+    ctx.moveTo(-r*0.15,r*0.3); ctx.lineTo(-r*0.15+legSwing*0.3,r*0.55);
+    ctx.moveTo(r*0.15,r*0.3); ctx.lineTo(r*0.15-legSwing*0.3,r*0.55);
+    ctx.stroke();
+    ctx.fillStyle='#f2e8d8';
+    ctx.beginPath(); ctx.ellipse(0,0,r*0.55,r*0.4,0,0,Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.arc(r*0.45,-r*0.25,r*0.28,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle='#d68a2a';
+    ctx.beginPath(); ctx.moveTo(r*0.7,-r*0.25); ctx.lineTo(r*0.95,-r*0.2); ctx.lineTo(r*0.7,-r*0.12); ctx.closePath(); ctx.fill();
+  } else {
+    const c=TOWN_ANIMAL_KINDS[kind]||TOWN_ANIMAL_KINDS.goat;
+    const bodyLen=kind==='deer'?r*1.1:r*0.85;
+    ctx.strokeStyle=c.legs; ctx.lineWidth=Math.max(1.2,r*0.13); ctx.lineCap='round';
+    ctx.beginPath();
+    ctx.moveTo(-bodyLen*0.35,r*0.28); ctx.lineTo(-bodyLen*0.35+legSwing,r*0.28+r*0.55);
+    ctx.moveTo(bodyLen*0.35,r*0.28); ctx.lineTo(bodyLen*0.35-legSwing,r*0.28+r*0.55);
+    ctx.stroke();
+    ctx.fillStyle=c.body;
+    ctx.beginPath(); ctx.ellipse(0,0,bodyLen*0.55,r*0.42,0,0,Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.arc(bodyLen*0.55,-r*0.25,r*0.28,0,Math.PI*2); ctx.fill();
+    ctx.strokeStyle=c.accent; ctx.lineWidth=Math.max(1,r*0.09);
+    ctx.beginPath();
+    ctx.moveTo(bodyLen*0.5,-r*0.5); ctx.lineTo(bodyLen*0.42,-r*0.75);
+    ctx.moveTo(bodyLen*0.62,-r*0.5); ctx.lineTo(bodyLen*0.7,-r*0.75);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
 /* Focus camera: tapping a citizen (or Prev/Next) smoothly zooms and centers on
    them, like tapping a pin on a map -- a clean, close, individual view of that
    one person instead of a crowd. Eases toward its target every frame so it
@@ -2298,6 +2443,15 @@ function drawTownView(town){
   townViewScreenPos={};
   const crowded=npcs.length>150;
   const rBase=9*(1+Math.min(townCam.scale-1,4)*0.5);
+
+  const animals=ensureTownAnimals(town);
+  for(const a of animals){
+    stepAnimalMotion(a,dt,now);
+    const asx=camOffsetX+a.x*camScale, asy=camOffsetY+a.y*camScale;
+    if(asx<-30||asx>canvas.width+30||asy<-30||asy>canvas.height+30) continue;
+    drawAnimal(asx,asy,rBase*0.55,a.kind,a.state==='walking',a.walkPhase);
+  }
+
   for(const n of npcs){
     let home=town.buildings.find(bd=>bd.id===n.homeId);
     if(!home){ ensureHome(n,town); home=town.buildings.find(bd=>bd.id===n.homeId); }
