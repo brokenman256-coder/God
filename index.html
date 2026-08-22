@@ -682,7 +682,7 @@ function initNewGame(){
     pendingPower:null, offlineProgress:true,
     stats:{totalBirths:0,totalDeaths:0,totalPrayersAnswered:0,totalPrayersDenied:0},
     dirty:{powers:true,prayers:true,specimen:true,towns:true,header:true},
-    viewMode:'world', viewingTownId:null, caravans:[]
+    viewMode:'world', viewingTownId:null, caravans:[], battles:[]
   };
 }
 
@@ -726,7 +726,9 @@ const BUILDING_TYPES={
   farm:{icon:'🌾',name:'Farm'}, temple:{icon:'🛕',name:'Temple'}, shrine:{icon:'🕯️',name:'Shrine'},
   well:{icon:'⛲',name:'Well'}, tower:{icon:'🏢',name:'Tower',tall:true}, jail:{icon:'🔒',name:'Jail'},
   hall:{icon:'🏛️',name:'Town Hall'}, hospital:{icon:'🏥',name:'Hospital'}, workshop:{icon:'🔨',name:'Workshop'},
-  mine:{icon:'⛏️',name:'Mine'}, market:{icon:'🏪',name:'Market'}
+  mine:{icon:'⛏️',name:'Mine'}, market:{icon:'🏪',name:'Market'},
+  grandTemple:{icon:'🛕',name:'Grand Temple',tall:true}, castle:{icon:'🏰',name:'Castle',tall:true},
+  stadium:{icon:'🏟️',name:'Stadium'}
 };
 const JOB_CAPACITY={farm:4,workshop:3,mine:3,market:2};
 function buildingTypeForJob(job){ return {farmer:'farm',miner:'mine',artisan:'workshop',merchant:'market'}[job]; }
@@ -805,6 +807,15 @@ function syncTownBuildings(town){
       placeBuilding(town,'tower');
       towers=town.buildings.filter(b=>b.type==='tower');
     }
+  }
+  if(town.techStageIdx>=4 && town.population>=40 && !town.buildings.some(b=>b.type==='castle')){
+    placeBuilding(town,'castle');
+  }
+  if(town.worship>=70 && !town.buildings.some(b=>b.type==='grandTemple')){
+    placeBuilding(town,'grandTemple');
+  }
+  if(town.techStageIdx>=7 && town.population>=60 && !town.buildings.some(b=>b.type==='stadium')){
+    placeBuilding(town,'stadium');
   }
 }
 function ensureHome(npc,town){
@@ -1029,6 +1040,8 @@ function simulateTick(){
   maybeFoundColony();
   maybeSendCaravan();
   stepCaravans();
+  maybeStartBattle();
+  stepBattles();
   decayOverlays();
   checkEraAdvance();
   if(G.tickCount%20===0) stepCultureDiffusion();
@@ -1149,7 +1162,8 @@ function stepTown(town){
   const crimeTarget=clamp(town.unrest*0.4+(hungry?28:0)+inequality*22-town.policeStrength*0.35,0,100);
   town.crimeRate=lerp(town.crimeRate,crimeTarget,0.06);
   town.unrest=clamp(town.unrest+(town.crimeRate>60?0.3:-0.2)+(activeDisease(town)?0.15:0)+(town.atWarWith.length?0.25:0)-gov.unrestDecay*0.4,0,100);
-  const policeBase=4+town.techStageIdx*0.6-gov.corruption*3;
+  const castleBonus=town.buildings.some(b=>b.type==='castle')?8:0;
+  const policeBase=4+town.techStageIdx*0.6-gov.corruption*3+castleBonus;
   const guardBoost = G.tickCount<town.guardBoostUntil?18:0;
   town.policeStrength=clamp(lerp(town.policeStrength,policeBase+guardBoost,0.08),0,100);
 
@@ -1568,6 +1582,11 @@ function stepWorship(town){
   if(town.worship>=40 && Math.random()<0.0015){
     log(`The faithful of ${town.name} chant: "${choice(CHANTS)}"`,'general',{silent:true});
   }
+  if(town.worship>=25 && Math.random()<0.0008){
+    for(const id of town.npcIds){ const n=G.npcs[id]; if(n&&n.alive) n.mood=clamp(n.mood+15,0,100); }
+    town.worship=clamp(town.worship+3,0,100);
+    log(`${town.name} celebrates ${town.culture?town.culture.festival:'a great festival'} -- the whole town gives thanks.`,'milestone');
+  }
 }
 function generateCreed(town){
   const hist=town.divineHistory;
@@ -1738,6 +1757,71 @@ function stepCaravans(){
       if(from && from.alive) from.gold=clamp(from.gold+goldGain,0,999999);
       log(`A trade caravan from ${from?from.name:'a distant land'} delivers ${c.amount} ${c.resource} to ${to.name}.`,'general',{silent:true});
     }
+    return false;
+  });
+}
+
+/* Real, autonomous battles: towns raise and fight on their own once at war --
+   the player never commands units directly, only Force War/Force Peace (and
+   whatever indirect influence blessing/cursing individuals provides). A
+   battle is a visible march between the two settlements (rendered on the
+   world map like a caravan), resolved by relative military strength with
+   real casualties, plunder, and a chance of the loser suing for peace. */
+function militaryStrength(town){
+  const morale=clamp(1-(town.unrest/150),0.3,1.2);
+  const techMult=1+town.techStageIdx*0.15;
+  const govBonus=1+(GOVERNMENT_TYPES[town.government.type].warPropensity-1)*0.2;
+  return Math.max(1,town.population*morale*techMult*govBonus);
+}
+function killRandomTrackedSoldiers(town,count){
+  const adults=town.npcIds.map(id=>G.npcs[id]).filter(n=>n&&n.alive&&(n.status==='adult'||n.status==='elder'));
+  for(let i=0;i<count&&adults.length;i++){
+    const idx=irand(0,adults.length-1);
+    const n=adults.splice(idx,1)[0];
+    killNpc(n,town,'battle');
+  }
+}
+function maybeStartBattle(){
+  if(G.battles.length>=4) return;
+  for(const town of livingTowns()){
+    for(const enemyId of town.atWarWith){
+      if(town.id>enemyId) continue;
+      const enemy=townOf(enemyId); if(!enemy||!enemy.alive) continue;
+      const already=G.battles.some(b=>(b.fromTownId===town.id&&b.toTownId===enemy.id)||(b.fromTownId===enemy.id&&b.toTownId===town.id));
+      if(already) continue;
+      if(Math.random()<0.006){
+        G.battles.push({id:uid('bt'),fromTownId:town.id,toTownId:enemy.id,startTick:G.tickCount,duration:10});
+        log(`${town.name} marches to war against ${enemy.name}.`,'disaster');
+      }
+    }
+  }
+}
+function resolveBattle(b){
+  const a=townOf(b.fromTownId), d=townOf(b.toTownId);
+  if(!a||!a.alive||!d||!d.alive) return;
+  const sa=militaryStrength(a), sd=militaryStrength(d);
+  const aWins=Math.random()<sa/(sa+sd);
+  const winner=aWins?a:d, loser=aWins?d:a;
+  const loserFrac=rand(0.02,0.06), winnerFrac=rand(0.005,0.02);
+  const loserCasualties=Math.round(loser.population*loserFrac);
+  const winnerCasualties=Math.round(winner.population*winnerFrac);
+  loser.population=Math.max(0,loser.population-loserCasualties);
+  winner.population=Math.max(0,winner.population-winnerCasualties);
+  killRandomTrackedSoldiers(loser,Math.min(loser.npcIds.length,Math.ceil(loserFrac*loser.npcIds.length)));
+  killRandomTrackedSoldiers(winner,Math.min(winner.npcIds.length,Math.ceil(winnerFrac*winner.npcIds.length*0.5)));
+  loser.unrest=clamp(loser.unrest+15,0,100);
+  winner.government.stability=clamp(winner.government.stability+8,0,100);
+  const plunder=Math.round(loser.gold*0.1);
+  loser.gold=clamp(loser.gold-plunder,0,999999);
+  winner.gold=clamp(winner.gold+plunder,0,999999);
+  log(`Battle at the border: ${winner.name}'s forces defeat ${loser.name}, inflicting ${loserCasualties} casualties and seizing ${plunder} gold.`,'disaster');
+  if(loser.population<winner.population*0.4 && Math.random()<0.4) endWar(a,d,'decisive defeat');
+  markDirty('towns');
+}
+function stepBattles(){
+  G.battles=G.battles.filter(b=>{
+    if(G.tickCount-b.startTick<b.duration) return true;
+    resolveBattle(b);
     return false;
   });
 }
@@ -2253,6 +2337,14 @@ function drawMap(){
     ctx.textAlign='center'; ctx.textBaseline='middle';
     ctx.fillText('🐪',cx,cy);
   }
+  for(const b of G.battles){
+    const from=townOf(b.fromTownId), to=townOf(b.toTownId);
+    if(!from||!to) continue;
+    const t=clamp((G.tickCount-b.startTick)/b.duration,0,1);
+    const wx=lerp(from.x,to.x,t), wy=lerp(from.y,to.y,t);
+    const cx=offsetX+wx*tileSize+tileSize/2, cy=offsetY+wy*tileSize+tileSize/2;
+    drawBattleMarch(cx,cy,Math.min(22,Math.max(9,tileSize*0.8)),pulse);
+  }
   if(G.pendingPower && G.pendingPower.def.target==='town-pair' && G.pendingPower.first){
     const t=G.pendingPower.first;
     const cx=offsetX+t.x*tileSize+tileSize/2, cy=offsetY+t.y*tileSize+tileSize/2;
@@ -2616,6 +2708,21 @@ function stepJet(j,dt,now){
   }
   j.x+=j.vx*dt; j.y+=j.vy*dt;
   if(j.x<-60||j.x>TOWN_VIEW_SIZE+60){ j.active=false; j.waitUntil=now+rand(8000,20000); }
+}
+/* Vector crossed-swords marker for a battle march on the world map -- not
+   an emoji glyph, since crossed-swords (like the pickaxe before it) carries
+   a variation selector that can render wildly oversized on some platforms. */
+function drawBattleMarch(cx,cy,size,pulse){
+  ctx.save();
+  ctx.translate(cx,cy);
+  ctx.globalAlpha=0.75+((pulse??0.5)*0.25);
+  ctx.strokeStyle='#c0392b'; ctx.lineWidth=Math.max(1.6,size*0.13); ctx.lineCap='round';
+  ctx.beginPath(); ctx.moveTo(-size*0.38,-size*0.38); ctx.lineTo(size*0.38,size*0.38); ctx.stroke();
+  ctx.strokeStyle='#cfd3d6';
+  ctx.beginPath(); ctx.moveTo(size*0.38,-size*0.38); ctx.lineTo(-size*0.38,size*0.38); ctx.stroke();
+  ctx.fillStyle='#e74c3c';
+  ctx.beginPath(); ctx.arc(0,0,size*0.14,0,Math.PI*2); ctx.fill();
+  ctx.restore();
 }
 function drawJet(cx,cy,facingRight){
   ctx.save();
@@ -3727,6 +3834,7 @@ function boot(){
     G.viewMode='world'; G.viewingTownId=null;
     if(!G.grid) G.grid=buildGrid(60,36,G.seed);
     G.caravans=G.caravans||[];
+    G.battles=G.battles||[];
     G.towns.forEach(t=>{
       t.buildings=t.buildings||[];
       if(t.materials===undefined) t.materials=0;
