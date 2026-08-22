@@ -550,6 +550,10 @@ const POWERS=[
    desc:"Grant a newborn exceptional talent. Target a child from a town's citizen list."},
  {id:'anointMessiah',name:'Anoint Messiah',icon:'👑',cat:'Blessing',cost:25,target:'npc',minEra:ERA.RISE,
    desc:'Anoint an adult to spread your worship across the world.'},
+ {id:'anointDeity',name:'Anoint Deity',icon:'✨',cat:'Blessing',cost:22,target:'npc',minEra:ERA.RISE,
+   desc:'Elevate a mortal beyond citizenhood entirely -- the people will worship them as a living god, not one of their own. Unlike a Messiah, a town may have several.'},
+ {id:'commandKill',name:'Command Murder',icon:'🔪',cat:'Blessing',cost:18,target:'npc',minEra:ERA.RISE,
+   desc:"Choose a victim, then compel another citizen to end their life. The killer is judged like anyone else who commits murder."},
  {id:'freezePerson',name:'Freeze Person',icon:'🧊',cat:'Blessing',cost:15,target:'npc',minEra:ERA.RISE,
    desc:'Stop a person exactly as they are, outside the flow of time. Casting again thaws them.'},
  {id:'grantPower',name:'Grant Power',icon:'🪄',cat:'Blessing',cost:20,target:'npc',minEra:ERA.RISE,
@@ -707,7 +711,7 @@ function createTown(x,y,name){
     unrest:5, crimeRate:5, policeStrength:10,
     worship:10, creed:null, divineHistory:{},
     diseases:[], atWarWith:[], tension:{},
-    npcIds:[], notableIds:[], messiahId:null, alive:true, guardBoostUntil:0,
+    npcIds:[], notableIds:[], messiahId:null, deityIds:[], alive:true, guardBoostUntil:0,
     government:{type:'chiefdom',leaderId:null,stability:60,since:G.tickCount},
     secularism:0.03, buildings:[], culture:generateCulture(),
     totalArrests:0, totalConvictions:0
@@ -968,7 +972,11 @@ function spawnFirstHumans(){
   const site=findGoodTownSite();
   const town=createTown(site.x,site.y,randomTownName());
   town.population=8;
-  for(let i=0;i<8;i++) addNpcToTown(town,makeNpc({age:16+Math.random()*22,townId:town.id,techStageIdx:town.techStageIdx}));
+  /* A founding population isn't just lone adults -- a couple of children
+     come along too, so a brand-new (or reseeded) settlement doesn't read
+     as childless until the first native births happen. */
+  for(let i=0;i<6;i++) addNpcToTown(town,makeNpc({age:16+Math.random()*22,townId:town.id,techStageIdx:town.techStageIdx}));
+  for(let i=0;i<2;i++) addNpcToTown(town,makeNpc({age:4+Math.random()*9,townId:town.id,techStageIdx:town.techStageIdx}));
   G.towns.push(town);
   log(wasExtinct?`Though the old world fell silent, a new people rises at ${town.name} to take its place.`
     :`At ${town.name}, the first humans awaken and gaze upon the world you made.`,'milestone');
@@ -1282,7 +1290,8 @@ function updateCrime(n,town){
 const CRIME_SEVERITIES={
   minor:{label:'petty theft',fine:[8,20],prisonDays:[8,18],prisonChance:0.35},
   moderate:{label:'assault',fine:[20,45],prisonDays:[18,40],prisonChance:0.65},
-  serious:{label:'grand theft',fine:[45,90],prisonDays:[40,90],prisonChance:0.85}
+  serious:{label:'grand theft',fine:[45,90],prisonDays:[40,90],prisonChance:0.85},
+  murder:{label:'murder',fine:[0,0],prisonDays:[120,240],prisonChance:1}
 };
 function rollCrimeSeverity(n){
   const heat=n.crimeInclination/100;
@@ -1307,13 +1316,13 @@ function commitCrime(n,town){
    town's treasury, or actual prison time (n.prisonUntil) that pulls the
    convict out of the job pool and confines them to the jail in Town View
    until release. */
-function arrestAndTry(n,town){
+function arrestAndTry(n,town,forcedSeverity){
   town.totalArrests=(town.totalArrests||0)+1;
   n.arrestCount=(n.arrestCount||0)+1;
-  const severity=rollCrimeSeverity(n);
+  const severity=forcedSeverity||rollCrimeSeverity(n);
   const def=CRIME_SEVERITIES[severity];
   const gov=GOVERNMENT_TYPES[town.government.type];
-  const convictionChance=clamp(0.55+town.policeStrength/400-gov.corruption*0.15,0.25,0.95);
+  const convictionChance=forcedSeverity?0.97:clamp(0.55+town.policeStrength/400-gov.corruption*0.15,0.25,0.95);
   const convicted=Math.random()<convictionChance;
   if(!convicted){
     n.crimeInclination=clamp(n.crimeInclination-10,0,100);
@@ -1454,6 +1463,7 @@ function killNpc(n,town,cause){
   if(n.notable){
     town.notableIds=town.notableIds.filter(id=>id!==n.id);
     if(town.messiahId===n.id) town.messiahId=null;
+    if(town.deityIds) town.deityIds=town.deityIds.filter(id=>id!==n.id);
     if(town.government.leaderId===n.id) town.government.leaderId=null;
     log(`${n.name}, ${art(n.title||'notable figure')} of ${town.name}, has died of ${cause}.`,'death');
   }
@@ -1546,8 +1556,9 @@ function stepWorship(town){
   town.secularism=npcs.length?1-(believers.length/npcs.length):town.secularism;
   const avgFaith=believers.length?believers.reduce((s,n)=>s+n.faith,0)/believers.length:0;
   const messiahBonus=town.messiahId?12:0;
+  const deityBonus=(town.deityIds?town.deityIds.length:0)*9;
   const shrineBonus=town.buildings&&town.buildings.some(b=>b.type==='shrine')?1.5:0;
-  const target=avgFaith*(1-town.secularism*0.35)+messiahBonus+shrineBonus;
+  const target=avgFaith*(1-town.secularism*0.35)+messiahBonus+deityBonus+shrineBonus;
   town.worship=clamp(lerp(town.worship,target,0.03),0,100);
   if(town.worship>=50 && !town.creed){
     town.creed=generateCreed(town);
@@ -1673,7 +1684,8 @@ function maybeFoundColony(){
       nt.techStageIdx=Math.max(0,town.techStageIdx-1);
       town.population=Math.round(town.population*0.7);
       G.towns.push(nt);
-      for(let i=0;i<6;i++) addNpcToTown(nt,makeNpc({age:16+Math.random()*20,townId:nt.id,techStageIdx:nt.techStageIdx}));
+      for(let i=0;i<5;i++) addNpcToTown(nt,makeNpc({age:16+Math.random()*20,townId:nt.id,techStageIdx:nt.techStageIdx}));
+      addNpcToTown(nt,makeNpc({age:3+Math.random()*10,townId:nt.id,techStageIdx:nt.techStageIdx}));
       const candidates=town.npcIds.map(id=>G.npcs[id]).filter(n=>n&&n.alive&&n.status==='adult'&&!n.notable&&(n.traits.includes('Ambitious')||n.curiosity>70));
       const founder=candidates.length?choice(candidates):null;
       if(founder){
@@ -1937,6 +1949,15 @@ function applyNpcPower(power,n){
     n.notable=true; n.role='messiah'; n.title='Messiah';
     if(!town.notableIds.includes(n.id)) town.notableIds.push(n.id);
     log(`${n.name} is anointed Messiah, spreading your worship across the world.`,'milestone');
+  } else if(power.id==='anointDeity'){
+    if(n.status!=='adult'&&n.status!=='elder'){ toast('Only adults may be made divine.'); return false; }
+    if(town){
+      town.deityIds=town.deityIds||[];
+      if(!town.deityIds.includes(n.id)) town.deityIds.push(n.id);
+    }
+    n.deity=true; n.notable=true; if(!n.title) n.title='Living God';
+    if(!town.notableIds.includes(n.id)) town.notableIds.push(n.id);
+    log(`${n.name} is raised above mortal life -- ${town.name} now worships them as a living god.`,'milestone');
   } else if(power.id==='freezePerson'){
     n.frozen=!n.frozen;
     log(n.frozen?`${n.name} is frozen outside the flow of time.`:`${n.name} thaws, and time takes hold of them again.`,'general',{silent:true});
@@ -2375,9 +2396,17 @@ function drawPersonFigure(r,app,status,detailed,walking,walkPhase,working,workPh
     const hairColor=HAIR_COLORS[app.hairColor??0]||HAIR_COLORS[0];
     drawPersonHair(app.hairStyle,hairColor,headR,headCy);
     const eyeColor=EYE_COLORS[app.eyeColor??0]||EYE_COLORS[0];
+    ctx.fillStyle='rgba(255,255,255,0.92)';
+    ctx.beginPath(); ctx.ellipse(-headR*0.34,headCy+headR*0.05,headR*0.17,headR*0.2,0,0,Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(headR*0.34,headCy+headR*0.05,headR*0.17,headR*0.2,0,0,Math.PI*2); ctx.fill();
     ctx.fillStyle=eyeColor;
-    ctx.beginPath(); ctx.ellipse(-headR*0.34,headCy+headR*0.05,headR*0.13,headR*0.16,0,0,Math.PI*2); ctx.fill();
-    ctx.beginPath(); ctx.ellipse(headR*0.34,headCy+headR*0.05,headR*0.13,headR*0.16,0,0,Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(-headR*0.34,headCy+headR*0.05,headR*0.12,headR*0.15,0,0,Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(headR*0.34,headCy+headR*0.05,headR*0.12,headR*0.15,0,0,Math.PI*2); ctx.fill();
+    ctx.strokeStyle=shadeHex(hairColor,-10); ctx.lineWidth=Math.max(0.6,headR*0.08); ctx.lineCap='round';
+    ctx.beginPath(); ctx.moveTo(-headR*0.5,headCy-headR*0.28); ctx.lineTo(-headR*0.18,headCy-headR*0.34); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(headR*0.18,headCy-headR*0.34); ctx.lineTo(headR*0.5,headCy-headR*0.28); ctx.stroke();
+    ctx.strokeStyle='rgba(110,55,55,0.65)'; ctx.lineWidth=Math.max(0.6,headR*0.09); ctx.lineCap='round';
+    ctx.beginPath(); ctx.arc(0,headCy+headR*0.3,headR*0.26,0.15*Math.PI,0.85*Math.PI); ctx.stroke();
     if(working) drawWorkTool(job,r,workPhase);
   }
 }
@@ -2387,6 +2416,13 @@ function drawNpcDot(cx,cy,r,n,walking,walkPhase,detailed,working,workPhase,jaile
     ctx.beginPath(); ctx.arc(cx,cy,r*1.15,0,Math.PI*2);
     ctx.fillStyle='rgba(140,210,255,0.3)'; ctx.fill();
     ctx.strokeStyle='rgba(180,225,255,0.9)'; ctx.lineWidth=1.5; ctx.stroke();
+  }
+  if(n.deity){
+    const glow=ctx.createRadialGradient(cx,cy,r*0.3,cx,cy,r*2.1);
+    glow.addColorStop(0,'rgba(255,236,180,0.55)');
+    glow.addColorStop(1,'rgba(255,236,180,0)');
+    ctx.fillStyle=glow;
+    ctx.beginPath(); ctx.arc(cx,cy,r*2.1,0,Math.PI*2); ctx.fill();
   }
   ctx.save();
   ctx.translate(cx,cy-bob);
@@ -2521,6 +2557,76 @@ function drawAnimal(cx,cy,r,kind,walking,walkPhase){
   }
   ctx.restore();
 }
+/* Modern-era vehicles: a couple of cars driving straight lines back and
+   forth once a country reaches the Modern Age, and jets crossing the sky
+   once it reaches the Atomic Age -- purely decorative, same idea as the
+   animals above, gated on techStageIdx instead of terrain/buildings. */
+const CAR_COLORS=['#b23a3a','#3a5ab2','#e8c25a','#4a4a52','#e8e8e8','#3a8a5a'];
+let townVehicleState={_townId:null,_stage:-1,cars:[],jets:[]};
+function ensureTownVehicles(town){
+  if(townVehicleState._townId===town.id && townVehicleState._stage===town.techStageIdx) return townVehicleState;
+  const cars=[];
+  if(town.techStageIdx>=7){
+    for(let i=0;i<3;i++){
+      const horizontal=Math.random()<0.5;
+      const fixed=rand(60,TOWN_VIEW_SIZE-60);
+      const ax=horizontal?40:fixed, ay=horizontal?fixed:40;
+      const bx=horizontal?TOWN_VIEW_SIZE-40:fixed, by=horizontal?fixed:TOWN_VIEW_SIZE-40;
+      cars.push({x:ax,y:ay,ax,ay,bx,by,dir:1,color:choice(CAR_COLORS)});
+    }
+  }
+  const jets=[];
+  if(town.techStageIdx>=8){
+    jets.push({active:false,waitUntil:0,x:0,y:0,vx:0,vy:0});
+  }
+  townVehicleState={_townId:town.id,_stage:town.techStageIdx,cars,jets};
+  return townVehicleState;
+}
+function stepCar(v,dt){
+  const speed=70;
+  const dx=(v.dir>0?v.bx:v.ax)-v.x, dy=(v.dir>0?v.by:v.ay)-v.y;
+  const dist=Math.hypot(dx,dy);
+  if(dist<4){ v.dir*=-1; return; }
+  const step=speed*dt;
+  v.x+=dx/dist*Math.min(step,dist); v.y+=dy/dist*Math.min(step,dist);
+  v.angle=Math.atan2(dy,dx);
+}
+function drawCar(cx,cy,angle,color){
+  ctx.save();
+  ctx.translate(cx,cy); ctx.rotate(angle||0);
+  ctx.fillStyle='rgba(0,0,0,0.25)'; ctx.beginPath(); ctx.ellipse(0,4,11,4,0,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle='#222';
+  ctx.beginPath(); ctx.ellipse(-6,4,3,2.4,0,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(6,4,3,2.4,0,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle=color;
+  ctx.beginPath(); ctx.roundRect?ctx.roundRect(-11,-5,22,9,3):ctx.rect(-11,-5,22,9); ctx.fill();
+  ctx.fillStyle='rgba(180,220,255,0.75)';
+  ctx.beginPath(); ctx.roundRect?ctx.roundRect(-4,-6,8,4,1.5):ctx.rect(-4,-6,8,4); ctx.fill();
+  ctx.restore();
+}
+function stepJet(j,dt,now){
+  if(!j.active){
+    if(now>=j.waitUntil) {
+      const fromLeft=Math.random()<0.5;
+      j.x=fromLeft?-40:TOWN_VIEW_SIZE+40; j.y=rand(30,150);
+      j.vx=(fromLeft?1:-1)*140; j.vy=rand(-6,6);
+      j.active=true;
+    }
+    return;
+  }
+  j.x+=j.vx*dt; j.y+=j.vy*dt;
+  if(j.x<-60||j.x>TOWN_VIEW_SIZE+60){ j.active=false; j.waitUntil=now+rand(8000,20000); }
+}
+function drawJet(cx,cy,facingRight){
+  ctx.save();
+  ctx.translate(cx,cy); if(!facingRight) ctx.scale(-1,1);
+  ctx.strokeStyle='rgba(255,255,255,0.35)'; ctx.lineWidth=2;
+  ctx.beginPath(); ctx.moveTo(-40,2); ctx.lineTo(-10,0); ctx.stroke();
+  ctx.fillStyle='#d8dce2';
+  ctx.beginPath(); ctx.moveTo(-10,0); ctx.lineTo(10,-2); ctx.lineTo(12,0); ctx.lineTo(10,2); ctx.closePath(); ctx.fill();
+  ctx.beginPath(); ctx.moveTo(-2,0); ctx.lineTo(2,-7); ctx.lineTo(4,0); ctx.closePath(); ctx.fill();
+  ctx.restore();
+}
 /* Focus camera: tapping a citizen (or Prev/Next) smoothly zooms and centers on
    them, like tapping a pin on a map -- a clean, close, individual view of that
    one person instead of a crowd. Eases toward its target every frame so it
@@ -2613,6 +2719,24 @@ function drawTownView(town){
     const asx=camOffsetX+a.x*camScale, asy=camOffsetY+a.y*camScale;
     if(asx<-30||asx>canvas.width+30||asy<-30||asy>canvas.height+30) continue;
     drawAnimal(asx,asy,rBase*0.55,a.kind,a.state==='walking',a.walkPhase);
+  }
+
+  const vehicles=ensureTownVehicles(town);
+  for(const car of vehicles.cars){
+    stepCar(car,dt);
+    const vsx=camOffsetX+car.x*camScale, vsy=camOffsetY+car.y*camScale;
+    if(vsx<-30||vsx>canvas.width+30||vsy<-30||vsy>canvas.height+30) continue;
+    ctx.save(); ctx.translate(vsx,vsy); ctx.scale(camScale/scale,camScale/scale);
+    drawCar(0,0,car.angle||0,car.color);
+    ctx.restore();
+  }
+  for(const jet of vehicles.jets){
+    stepJet(jet,dt,now);
+    if(!jet.active) continue;
+    const jsx=camOffsetX+jet.x*camScale, jsy=camOffsetY+jet.y*camScale;
+    ctx.save(); ctx.translate(jsx,jsy); ctx.scale(camScale/scale,camScale/scale);
+    drawJet(0,0,jet.vx>0);
+    ctx.restore();
   }
 
   for(const n of npcs){
@@ -3018,6 +3142,7 @@ function openNpcModal(npc){
       </div>
     </div>
     ${npc.frozen?`<div class="pendingBanner"><span>❄️ Frozen outside the flow of time</span></div>`:''}
+    ${npc.deity?`<div class="pendingBanner"><span>✨ Worshipped as a living god -- not merely a citizen</span></div>`:''}
     ${isImprisoned(npc)?`<div class="pendingBanner"><span>🔒 Imprisoned — released on Day ${npc.prisonUntil}</span></div>`:''}
     ${(npc.arrestCount||0)>0?`<div class="mSub">Record: ${npc.arrestCount} arrest${npc.arrestCount===1?'':'s'}, ${npc.convictionCount||0} conviction${(npc.convictionCount||0)===1?'':'s'}</div>`:''}
     ${pendingApplies?`<div class="pendingBanner"><span>Apply ${esc(pending.def.name)} to ${esc(npc.name)}?</span><button data-applynpc="${npc.id}">Apply</button></div>`:''}
@@ -3036,8 +3161,10 @@ function openNpcModal(npc){
       <button data-npcact="curse" data-npc="${npc.id}">😈 Curse (6)</button>
       <button data-npcact="giftTalent" data-npc="${npc.id}" ${(npc.status==='infant'||npc.status==='child')&&!npc.giftedAtBirth?'':'disabled'}>🎁 Gift Talent (12)</button>
       <button data-npcact="anointMessiah" data-npc="${npc.id}" ${(npc.status==='adult'||npc.status==='elder')?'':'disabled'}>👑 Anoint Messiah (25)</button>
+      <button data-npcact="anointDeity" data-npc="${npc.id}" ${(npc.status==='adult'||npc.status==='elder')&&!npc.deity?'':'disabled'}>✨ Anoint Deity (22)</button>
       <button data-npcact="freezePerson" data-npc="${npc.id}">🧊 ${npc.frozen?'Unfreeze':'Freeze'} (15)</button>
       <button data-grantpower="${npc.id}" ${(npc.status==='adult'||npc.status==='elder')?'':'disabled'}>🪄 Grant Power (20)</button>
+      <button data-commandkill="${npc.id}">🔪 Command Murder (18)</button>
     </div>
   `);
 }
@@ -3056,6 +3183,35 @@ function openGrantPowerModal(npcId){
       }).join('')}
     </div>
   `);
+}
+/* Command Murder: pick the victim (opens this modal from their profile),
+   then pick who is compelled to do it. Resolved as a real crime through the
+   same arrest/trial/prison pipeline as any other killing -- the instigator
+   is tried and almost certainly convicted, not just let off as a scripted
+   event. */
+function openCommandKillModal(victimId){
+  const victim=G.npcs[victimId]; if(!victim) return;
+  const town=townOf(victim.townId); if(!town) return;
+  const candidates=town.npcIds.map(id=>G.npcs[id]).filter(n=>n&&n.alive&&n.id!==victim.id&&(n.status==='adult'||n.status==='elder'));
+  openModal(`
+    <button class="modalClose" data-close="1">×</button>
+    <h2>Command a Murder</h2>
+    <div class="mSub">Choose who will be compelled to end ${esc(victim.name)}'s life. Cost: ${POWER_BY_ID.commandKill.cost} favor.</div>
+    <div class="npcList">
+      ${candidates.map(n=>`<div class="npcRow" data-commandkiller="${n.id}" data-victim="${victim.id}">
+        <span class="miniPortrait">${portraitSVG(n.appearance,22)}</span>
+        <span class="nm">${esc(n.name)}</span><span class="role">${capitalize(n.job)}</span></div>`).join('')
+        || '<div class="emptyState">No other adult in this settlement to compel.</div>'}
+    </div>
+  `);
+}
+function commandMurder(instigator,victim,town){
+  killNpc(victim,town,'murder');
+  instigator.karma-=40;
+  log(`By your will, ${instigator.name} murders ${victim.name} in ${town.name}.`,'crime');
+  arrestAndTry(instigator,town,'murder');
+  recordDivine(town,'blessing');
+  markDirty('towns');
 }
 function openUnderworldModal(){
   const col=(arr,label)=>`<div class="soulCol"><h4>${label} (${arr.length})</h4>${
@@ -3339,6 +3495,23 @@ function initUI(){
     }
     const grantPowerBtn=e.target.closest('[data-grantpower]');
     if(grantPowerBtn){ openGrantPowerModal(grantPowerBtn.dataset.grantpower); return; }
+    const commandKillBtn=e.target.closest('[data-commandkill]');
+    if(commandKillBtn){ openCommandKillModal(commandKillBtn.dataset.commandkill); return; }
+    const commandKillerRow=e.target.closest('[data-commandkiller]');
+    if(commandKillerRow){
+      const instigator=G.npcs[commandKillerRow.dataset.commandkiller];
+      const victim=G.npcs[commandKillerRow.dataset.victim];
+      const town=victim?townOf(victim.townId):null;
+      const cost=POWER_BY_ID.commandKill.cost;
+      if(instigator&&victim&&town){
+        if(G.favor<cost){ toast('Not enough favor.'); return; }
+        G.favor-=cost;
+        commandMurder(instigator,victim,town);
+        closeModal();
+        renderDirty();
+      }
+      return;
+    }
     const grantBtn=e.target.closest('[data-grant]');
     if(grantBtn){
       const n=G.npcs[grantBtn.dataset.npc];
